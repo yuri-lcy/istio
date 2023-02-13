@@ -9,10 +9,12 @@ spec:
 
     pilot:
       enabled: true
+      hub: docker.io/istio/pilot
+      tag: 1.15.0
 
     ingressGateways:
     - name: istio-ingressgateway
-      enabled: true
+      enabled: false
 
     acmg:
       enabled: true
@@ -21,3 +23,5 @@ spec:
 
     acmgGateway:
       enabled: true
+      hub: docker.io/istio/proxyv2
+      tag: 1.15.0
