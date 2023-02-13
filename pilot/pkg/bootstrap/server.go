@@ -35,6 +35,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
+	acmgcontroller "istio.io/istio/pilot/pkg/acmg/controller"
 	"k8s.io/client-go/rest"
 
 	"istio.io/api/security/v1beta1"
@@ -285,6 +286,8 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 		return inject.WebhookConfig{}
 	}
 	s.initAmbient(args, getWebhookConfig)
+
+	s.initAcmg(args, getWebhookConfig)
 
 	s.XDSServer.InitGenerators(e, args.Namespace, s.internalDebugMux)
 
@@ -1139,6 +1142,14 @@ func (s *Server) initControllers(args *PilotArgs) error {
 		return fmt.Errorf("error initializing service controllers: %v", err)
 	}
 	return nil
+}
+
+func (s *Server) initAcmg(args *PilotArgs, webhookConfig func() inject.WebhookConfig) {
+	acmgController := acmgcontroller.NewAggregate(args.Namespace, s.clusterID, webhookConfig, s.XDSServer, false)
+	s.environment.AcmgCache = acmgController
+	if s.multiclusterController != nil {
+		s.multiclusterController.AddHandler(acmgController)
+	}
 }
 
 func (s *Server) initAmbient(args *PilotArgs, webhookConfig func() inject.WebhookConfig) {

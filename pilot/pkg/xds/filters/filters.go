@@ -177,6 +177,27 @@ var (
 			TypedConfig: protoconv.TypedStruct("type.googleapis.com/istio.set_internal_dst_address.v1.Config"),
 		},
 	}
+
+	CaptureTLSFilter = &listener.Filter{
+		Name: "capture_tls",
+		ConfigType: &listener.Filter_TypedConfig{
+			TypedConfig: protoconv.TypedStruct("type.googleapis.com/istio.tls_passthrough.v1.CaptureTLS"),
+		},
+	}
+
+	RestoreTLSFilter = &listener.Filter{
+		Name: "restore_tls",
+		ConfigType: &listener.Filter_TypedConfig{
+			TypedConfig: protoconv.TypedStruct("type.googleapis.com/istio.tls_passthrough.v1.RestoreTLS"),
+		},
+	}
+
+	BaggageFilter = &hcm.HttpFilter{
+		Name: "istio.filters.http.baggage_handler",
+		ConfigType: &hcm.HttpFilter_TypedConfig{
+			TypedConfig: protoconv.TypedStruct("type.googleapis.com/istio.telemetry.baggagehandler.v1.Config"),
+		},
+	}
 )
 
 func BuildRouterFilter(ctx *RouterFilterContext) *hcm.HttpFilter {

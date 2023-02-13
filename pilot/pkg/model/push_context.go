@@ -16,6 +16,7 @@ package model
 
 import (
 	"encoding/json"
+	"istio.io/istio/pilot/pkg/acmg"
 	"math"
 	"sort"
 	"strings"
@@ -258,6 +259,8 @@ type PushContext struct {
 
 	AmbientIndex ambient.Indexes
 
+	AcmgIndex acmg.Indexes
+
 	// cache gateways addresses for each network
 	// this is mainly used for kubernetes multi-cluster scenario
 	networkMgr *NetworkManager
@@ -395,6 +398,7 @@ const (
 	// GlobalUpdate describes a push triggered by a change to global config, such as mesh config
 	GlobalUpdate  TriggerReason = "global"
 	AmbientUpdate TriggerReason = "ambient"
+	AcmgUpdate    TriggerReason = "acmg"
 	// UnknownTrigger describes a push triggered by an unknown reason
 	UnknownTrigger TriggerReason = "unknown"
 	// DebugTrigger describes a push triggered for debugging
@@ -1227,6 +1231,8 @@ func (ps *PushContext) createNewContext(env *Environment) error {
 
 	ps.initAmbient(env)
 
+	ps.initAcmg(env)
+
 	// Must be initialized in the end
 	if err := ps.initSidecarScopes(env); err != nil {
 		return err
@@ -1370,6 +1376,8 @@ func (ps *PushContext) updateContext(
 	// TODO(stevenctl,ambient) can we optimize this to only happen on "if changed"
 	// TODO(stevenctl,ambient) how will SidecarScope work with this stuff?
 	ps.initAmbient(env)
+
+	ps.initAcmg(env)
 
 	// Must be initialized in the end
 	// Sidecars need to be updated if services, virtual services, destination rules, or the sidecar configs change
@@ -2065,6 +2073,13 @@ func (ps *PushContext) initAmbient(env *Environment) {
 	// only set for istiod, not agent
 	if env.Cache != nil {
 		ps.AmbientIndex = env.AmbientWorkloads()
+	}
+}
+
+func (ps *PushContext) initAcmg(env *Environment) {
+	// only set for istiod, not agent
+	if env.AcmgCache != nil {
+		ps.AcmgIndex = env.AcmgWorkloads()
 	}
 }
 

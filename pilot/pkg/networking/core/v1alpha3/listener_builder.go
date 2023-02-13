@@ -15,6 +15,7 @@
 package v1alpha3
 
 import (
+	"istio.io/istio/pilot/pkg/acmg"
 	"time"
 
 	accesslog "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v3"
@@ -94,6 +95,29 @@ func NewListenerBuilder(configgen *ConfigGeneratorImpl, node *model.Proxy, push 
 }
 
 func (lb *ListenerBuilder) WithWorkload(wl ambient.Workload) *ListenerBuilder {
+	dummy := &model.Proxy{
+		ConfigNamespace: wl.Namespace,
+		Labels:          wl.Labels,
+		Type:            lb.node.Type,
+	}
+	return &ListenerBuilder{
+		node:                    lb.node,
+		push:                    lb.push,
+		gatewayListeners:        lb.gatewayListeners,
+		inboundListeners:        lb.inboundListeners,
+		outboundListeners:       lb.outboundListeners,
+		httpProxyListener:       lb.httpProxyListener,
+		virtualOutboundListener: lb.virtualOutboundListener,
+		virtualInboundListener:  lb.virtualInboundListener,
+		envoyFilterWrapper:      lb.envoyFilterWrapper,
+		authnBuilder:            lb.authnBuilder,
+		authzBuilder:            authz.NewBuilder(authz.Local, lb.push, dummy),
+		authzCustomBuilder:      authz.NewBuilder(authz.Custom, lb.push, dummy),
+		Discovery:               lb.Discovery,
+	}
+}
+
+func (lb *ListenerBuilder) WithAcmgWorkload(wl acmg.Workload) *ListenerBuilder {
 	dummy := &model.Proxy{
 		ConfigNamespace: wl.Namespace,
 		Labels:          wl.Labels,

@@ -728,3 +728,6 @@ func UnsafeFeaturesEnabled() bool {
 
 var AmbientAutolabelIgnore = env.RegisterStringVar("AMBIENT_AUTOLABEL_IGNORE", "istio-system,metallb-system,kube-system",
 	"ignored namespaces").Get()
+
+var AcmgAutolabelIgnore = env.RegisterStringVar("ACMG_AUTOLABEL_IGNORE", "istio-system,metallb-system,kube-system",
+	"ignored namespaces").Get()

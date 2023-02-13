@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"istio.io/istio/pilot/pkg/acmg"
 	"net"
 	"regexp"
 	"sort"
@@ -70,6 +71,8 @@ type Environment struct {
 
 	// For getting sidecarless/ambient info
 	ambient.Cache
+
+	acmg.AcmgCache
 
 	// Watcher is the watcher for the mesh config (to be merged into the config store)
 	mesh.Watcher
@@ -812,6 +815,10 @@ const (
 
 	// Ztunnel type is used for node proxies (ztunnel)
 	Ztunnel NodeType = "ztunnel"
+
+	CoreProxy NodeType = "coreproxy"
+
+	NodeProxy NodeType = "nodeproxy"
 )
 
 var NodeTypes = [...]NodeType{SidecarProxy, Router, Waypoint, Ztunnel}
