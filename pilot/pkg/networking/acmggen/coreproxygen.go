@@ -40,7 +40,7 @@ func (p *CoreProxyGenerator) Generate(proxy *model.Proxy, w *model.WatchedResour
 				Resource: protoconv.MessageToAny(c),
 			})
 		}
-		// build sidecar scope, useless
+		// build sidecar scope egress, useless
 		out = append(p.buildCoreProxyListeners(proxy, req.Push), resources...)
 		// coreproxy outbound, useless
 		out = append(out, outboundTunnelListener("tunnel", proxy.Metadata.ServiceAccount))

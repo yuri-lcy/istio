@@ -180,6 +180,7 @@ const (
 	// negotiation. Note: ALPN negotiation is not currently implemented; HTTP/2 will always be used.
 	// This is future-proofed, however, because only the `h2` ALPN is exposed.
 	TunnelHTTP = "http"
+	TunnelH2   = "h2"
 )
 
 const (
