@@ -31,6 +31,7 @@ import (
 	"istio.io/istio/pilot/pkg/autoregistration"
 	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
+	"istio.io/istio/pilot/pkg/networking/acmggen"
 	"istio.io/istio/pilot/pkg/networking/ambientgen"
 	"istio.io/istio/pilot/pkg/networking/apigen"
 	"istio.io/istio/pilot/pkg/networking/core"
@@ -588,6 +589,18 @@ func (s *DiscoveryServer) InitGenerators(env *model.Environment, systemNameSpace
 	s.Generators["grpc/"+v3.ClusterType] = s.Generators["grpc"]
 
 	s.Generators["grpc/"+v3.ExtensionConfigurationType] = ecdsGen
+
+	s.Generators["nodeproxy-envoy"] = &acmggen.NodeProxyConfigGenerator{EndpointIndex: s.Env.EndpointIndex}
+	s.Generators["nodeproxy-envoy/"+v3.ListenerType] = s.Generators["nodeproxy-envoy"]
+	s.Generators["nodeproxy-envoy/"+v3.ClusterType] = s.Generators["nodeproxy-envoy"]
+	s.Generators["nodeproxy-envoy/"+v3.EndpointType] = s.Generators["nodeproxy-envoy"]
+	s.Generators["nodeproxy-envoy/"+v3.ExtensionConfigurationType] = ecdsGen
+
+	coreproxyGen := &acmggen.CoreProxyGenerator{
+		ConfigGenerator: s.ConfigGenerator,
+	}
+	s.Generators["coreproxy/"+v3.ListenerType] = coreproxyGen
+	s.Generators["coreproxy/"+v3.ClusterType] = coreproxyGen
 
 	waypointGen := &ambientgen.WaypointGenerator{
 		ConfigGenerator: s.ConfigGenerator,

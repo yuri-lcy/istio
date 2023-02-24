@@ -6,8 +6,7 @@ import (
 	ipsetlib "istio.io/istio/cni/pkg/ipset"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/pkg/env"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	klabels "k8s.io/apimachinery/pkg/labels"
 )
 
 var (
@@ -27,20 +26,18 @@ const (
 const (
 	dataplaneLabelAcmgValue = "acmg"
 
-	AmbientMeshNamespace = v1alpha1.MeshConfig_AmbientMeshConfig_DEFAULT
-	AmbientMeshOff       = v1alpha1.MeshConfig_AmbientMeshConfig_OFF
-	AmbientMeshOn        = v1alpha1.MeshConfig_AmbientMeshConfig_ON
+	AcmgMeshNamespace = v1alpha1.MeshConfig_AcmgMeshConfig_DEFAULT
+	AcmgMeshOff       = v1alpha1.MeshConfig_AcmgMeshConfig_OFF
+	AcmgMeshOn        = v1alpha1.MeshConfig_AcmgMeshConfig_ON
 )
 
 var Ipset = &ipsetlib.IPSet{
 	Name: "nodeproxy-pods-ips",
 }
 
-var acmgSelectors metav1.LabelSelector = metav1.LabelSelector{
-	MatchLabels: map[string]string{
-		label.IoIstioDataplaneMode.Name: dataplaneLabelAcmgValue,
-	},
-}
+var acmgSelectors = klabels.SelectorFromValidatedSet(map[string]string{
+	label.IoIstioDataplaneMode.Name: dataplaneLabelAcmgValue,
+})
 
 type AcmgArgs struct {
 	SystemNamespace string

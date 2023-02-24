@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"istio.io/istio/cni/pkg/acmg"
 	"os"
 	"strings"
 
@@ -78,6 +79,18 @@ var rootCmd = &cobra.Command{
 		if err = udsLogger.StartUDSLogServer(cfg.InstallConfig.LogUDSAddress, ctx.Done()); err != nil {
 			log.Errorf("Failed to start up UDS Log Server: %v", err)
 			return
+		}
+
+		if cfg.InstallConfig.AcmgEnabled {
+			// Start acmg controller
+			server, err := acmg.NewServer(ctx, acmg.AcmgArgs{
+				SystemNamespace: acmg.PodNamespace,
+				Revision:        acmg.Revision,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to create ambient informer service: %v", err)
+			}
+			server.Start()
 		}
 
 		if cfg.InstallConfig.AmbientEnabled {
@@ -160,7 +173,8 @@ func init() {
 		"Binaries that should not be installed. Currently Istio only installs one binary `istio-cni`")
 	registerIntegerParameter(constants.MonitoringPort, 15014, "HTTP port to serve prometheus metrics")
 	registerStringParameter(constants.LogUDSAddress, "/var/run/istio-cni/log.sock", "The UDS server address which CNI plugin will copy log ouptut to")
-	registerBooleanParameter(constants.AmbientEnabled, true, "Whether ambient controller is enabled")
+	registerBooleanParameter(constants.AmbientEnabled, false, "Whether ambient controller is enabled")
+	registerBooleanParameter(constants.AcmgEnabled, true, "Whether acmg controller is enabled")
 
 	// Repair
 	registerBooleanParameter(constants.RepairEnabled, true, "Whether to enable race condition repair or not")
@@ -252,6 +266,7 @@ func constructConfig() (*config.Config, error) {
 		LogUDSAddress:     viper.GetString(constants.LogUDSAddress),
 
 		AmbientEnabled: viper.GetBool(constants.AmbientEnabled),
+		AcmgEnabled:    viper.GetBool(constants.AcmgEnabled),
 	}
 
 	if len(installCfg.K8sNodeName) == 0 {

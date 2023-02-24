@@ -19,6 +19,7 @@ package plugin
 import (
 	"encoding/json"
 	"fmt"
+	"istio.io/istio/cni/pkg/acmg"
 	"net"
 	"runtime/debug"
 	"strconv"
@@ -202,6 +203,11 @@ func CmdAdd(args *skel.CmdArgs) (err error) {
 		interceptRuleMgrType = conf.Kubernetes.InterceptRuleMgrType
 	}
 
+	acmgConf, err := acmg.ReadAcmgConfig()
+	if err != nil {
+		log.Errorf("istio-cni cmdAdd failed to read acmg config %v", err)
+	}
+
 	ambientConf, err := ambient.ReadAmbientConfig()
 	if err != nil {
 		log.Errorf("istio-cni cmdAdd failed to read ambient config %v", err)
@@ -221,9 +227,24 @@ func CmdAdd(args *skel.CmdArgs) (err error) {
 				break
 			}
 		}
+		log.Infof("acmgConf.Mode: %s", acmgConf.Mode)
+		log.Infof("acmgConf.ZTunnelReady: %v", acmgConf.NodeProxyReady)
+
 		log.Infof("ambientConf.Mode: %s", ambientConf.Mode)
 		log.Infof("ambientConf.ZTunnelReady: %v", ambientConf.ZTunnelReady)
 		added := false
+		if !excludePod && acmgConf.Mode != acmg.AcmgMeshOff.String() && acmgConf.NodeProxyReady {
+			podIPs, err := getPodIPs(args.IfName, conf.PrevResult)
+			if err != nil {
+				log.Errorf("istio-cni cmdAdd failed to get pod IPs: %s", err)
+				return err
+			}
+			log.Infof("istio-cni cmdAdd podName: %s podIPs: %+v", podName, podIPs)
+			added, err = checkAcmg(*conf, *acmgConf, podName, podNamespace, args.IfName, podIPs)
+			if err != nil {
+				log.Errorf("istio-cni cmdAdd failed to check acmg: %s", err)
+			}
+		}
 		if !excludePod && ambientConf.Mode != ambient.AmbientMeshOff.String() && ambientConf.ZTunnelReady {
 			podIPs, err := getPodIPs(args.IfName, conf.PrevResult)
 			if err != nil {

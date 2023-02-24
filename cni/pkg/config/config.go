@@ -83,6 +83,8 @@ type InstallConfig struct {
 	// Whether ambient is enabled
 	AmbientEnabled bool
 
+	AcmgEnabled bool
+
 	// Use the external nsenter command for network namespace switching
 	HostNSEnterExec bool
 }

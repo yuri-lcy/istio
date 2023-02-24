@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"istio.io/api/mesh/v1alpha1"
-	"istio.io/istio/cni/pkg/ambient/constants"
+	"istio.io/istio/cni/pkg/acmg/constants"
 	"istio.io/istio/pilot/pkg/acmg/acmgpod"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/kube/controllers"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	listerv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/rest"
@@ -25,16 +26,18 @@ type Server struct {
 
 	nsLister listerv1.NamespaceLister
 
-	meshMode          v1alpha1.MeshConfig_AmbientMeshConfig_AmbientMeshMode
+	meshMode          v1alpha1.MeshConfig_AcmgMeshConfig_AcmgMeshMode
 	disabledSelectors []labels.Selector
 	mu                sync.Mutex
 	nodeProxyRunning  bool
+
+	marshalableDisabledSelectors []*metav1.LabelSelector
 }
 
 type AcmgConfigFile struct {
-	Mode              string            `json:"mode"`
-	DisabledSelectors []labels.Selector `json:"disabledSelectors"`
-	NodeProxyReady    bool              `json:"nodeproxyReady"`
+	Mode              string                  `json:"mode"`
+	DisabledSelectors []*metav1.LabelSelector `json:"disabledSelectors"`
+	NodeProxyReady    bool                    `json:"nodeproxyReady"`
 }
 
 func NewServer(ctx context.Context, args AcmgArgs) (*Server, error) {
@@ -47,12 +50,13 @@ func NewServer(ctx context.Context, args AcmgArgs) (*Server, error) {
 	}
 	// Set some defaults
 	s := &Server{
-		environment:       e,
-		ctx:               ctx,
-		meshMode:          v1alpha1.MeshConfig_AmbientMeshConfig_DEFAULT,
-		disabledSelectors: acmgpod.LegacySelectors,
-		nodeProxyRunning:  false,
-		kubeClient:        client,
+		environment:                  e,
+		ctx:                          ctx,
+		meshMode:                     AcmgMeshNamespace,
+		disabledSelectors:            acmgpod.LegacySelectors,
+		marshalableDisabledSelectors: acmgpod.LegacyLabelSelector,
+		nodeProxyRunning:             false,
+		kubeClient:                   client,
 	}
 
 	// We need to find our Host IP -- is there a better way to do this?
@@ -67,10 +71,10 @@ func NewServer(ctx context.Context, args AcmgArgs) (*Server, error) {
 	s.environment.AddMeshHandler(s.newConfigMapWatcher)
 	s.setupHandlers()
 
-	if s.environment.Mesh().AmbientMesh != nil {
+	if s.environment.Mesh().AcmgMesh != nil {
 		s.mu.Lock()
-		s.meshMode = s.environment.Mesh().AmbientMesh.Mode
-		s.disabledSelectors = s.environment.Mesh().AmbientMesh.DisabledSelectors
+		s.meshMode = s.environment.Mesh().AcmgMesh.Mode
+		s.disabledSelectors = acmgpod.LegacySelectors
 		s.mu.Unlock()
 	}
 
@@ -119,11 +123,11 @@ func (s *Server) Start() {
 }
 
 func (s *Server) UpdateConfig() {
-	log.Debug("Generating new ambient config file")
+	log.Debug("Generating new acmg config file")
 
 	cfg := &AcmgConfigFile{
 		Mode:              s.meshMode.String(),
-		DisabledSelectors: s.disabledSelectors,
+		DisabledSelectors: s.marshalableDisabledSelectors,
 		NodeProxyReady:    s.isNodeProxyRunning(),
 	}
 
@@ -134,14 +138,14 @@ func (s *Server) UpdateConfig() {
 }
 
 func (c *AcmgConfigFile) write() error {
-	configFile := constants.AmbientConfigFilepath
+	configFile := constants.AcmgConfigFilepath
 
 	data, err := json.Marshal(c)
 	if err != nil {
 		return err
 	}
 
-	log.Infof("Writing ambient config: %s", data)
+	log.Infof("Writing acmg config: %s", data)
 
 	return atomicWrite(configFile, data)
 }
@@ -154,8 +158,8 @@ func atomicWrite(filename string, data []byte) error {
 	return os.Rename(tmpFile, filename)
 }
 
-func ReadAmbientConfig() (*AcmgConfigFile, error) {
-	configFile := constants.AmbientConfigFilepath
+func ReadAcmgConfig() (*AcmgConfigFile, error) {
+	configFile := constants.AcmgConfigFilepath
 
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
 		return &AcmgConfigFile{
