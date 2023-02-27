@@ -214,6 +214,8 @@ meshConfig:
 
   ambientMesh:
     mode: "OFF"
+  acmgMesh:
+    mode: "OFF""
 
 global:
   # Used to locate istiod.

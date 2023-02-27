@@ -142,6 +142,8 @@ spec:
               name: cni-log-dir
             - mountPath: /etc/ambient-config
               name: cni-ambientconfig
+            - mountPath: /etc/acmg-config
+              name: cni-acmgconfig
           resources:
 {{- if .Values.cni.resources }}
 {{ toYaml .Values.cni.resources | trim | indent 12 }}
@@ -219,6 +221,9 @@ spec:
         - name: cni-ambientconfig
           hostPath:
             path: /etc/ambient-config
+        - name: cni-acmgconfig
+          hostPath:
+            path: /etc/acmg-config
         - name: cni-net-dir
           hostPath:
             path: {{ default "/etc/cni/net.d" .Values.cni.cniConfDir }}
