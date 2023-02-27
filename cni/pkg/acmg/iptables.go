@@ -15,11 +15,9 @@
 package acmg
 
 import (
-	"istio.io/pkg/log"
+	"istio.io/istio/cni/pkg/acmg/constants"
 	"strconv"
 	"strings"
-
-	"istio.io/istio/cni/pkg/ambient/constants"
 )
 
 type iptablesRule struct {
@@ -90,33 +88,33 @@ func (s *Server) initializeLists() error {
 
 	list := []*ExecList{
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableNat, "-N", constants.ChainZTunnelPrerouting}),
+			[]string{"-t", constants.TableNat, "-N", constants.ChainNodeProxyPrerouting}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableNat, "-I", "PREROUTING", "-j", constants.ChainZTunnelPrerouting}),
+			[]string{"-t", constants.TableNat, "-I", "PREROUTING", "-j", constants.ChainPrerouting}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableNat, "-N", constants.ChainZTunnelPostrouting}),
+			[]string{"-t", constants.TableNat, "-N", constants.ChainNodeProxyPostrouting}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableNat, "-I", "POSTROUTING", "-j", constants.ChainZTunnelPostrouting}),
+			[]string{"-t", constants.TableNat, "-I", "POSTROUTING", "-j", constants.ChainNodeProxyPostrouting}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-N", constants.ChainZTunnelPrerouting}),
+			[]string{"-t", constants.TableMangle, "-N", constants.ChainNodeProxyPrerouting}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-I", "PREROUTING", "-j", constants.ChainZTunnelPrerouting}),
+			[]string{"-t", constants.TableMangle, "-I", "PREROUTING", "-j", constants.ChainNodeProxyPrerouting}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-N", constants.ChainZTunnelPostrouting}),
+			[]string{"-t", constants.TableMangle, "-N", constants.ChainNodeProxyPostrouting}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-I", "POSTROUTING", "-j", constants.ChainZTunnelPostrouting}),
+			[]string{"-t", constants.TableMangle, "-I", "POSTROUTING", "-j", constants.ChainNodeProxyPostrouting}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-N", constants.ChainZTunnelOutput}),
+			[]string{"-t", constants.TableMangle, "-N", constants.ChainNodeProxyOutput}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-I", "OUTPUT", "-j", constants.ChainZTunnelOutput}),
+			[]string{"-t", constants.TableMangle, "-I", "OUTPUT", "-j", constants.ChainNodeProxyOutput}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-N", constants.ChainZTunnelInput}),
+			[]string{"-t", constants.TableMangle, "-N", constants.ChainNodeProxyInput}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-I", "INPUT", "-j", constants.ChainZTunnelInput}),
+			[]string{"-t", constants.TableMangle, "-I", "INPUT", "-j", constants.ChainNodeProxyInput}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-N", constants.ChainZTunnelForward}),
+			[]string{"-t", constants.TableMangle, "-N", constants.ChainNodeProxyForward}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-I", "FORWARD", "-j", constants.ChainZTunnelForward}),
+			[]string{"-t", constants.TableMangle, "-I", "FORWARD", "-j", constants.ChainNodeProxyForward}),
 	}
 
 	for _, l := range list {
@@ -140,19 +138,19 @@ func (s *Server) flushLists() {
 
 	list := []*ExecList{
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableNat, "-F", constants.ChainZTunnelPrerouting}),
+			[]string{"-t", constants.TableNat, "-F", constants.ChainNodeProxyPrerouting}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableNat, "-F", constants.ChainZTunnelPostrouting}),
+			[]string{"-t", constants.TableNat, "-F", constants.ChainNodeProxyPostrouting}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-F", constants.ChainZTunnelPrerouting}),
+			[]string{"-t", constants.TableMangle, "-F", constants.ChainNodeProxyPrerouting}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-F", constants.ChainZTunnelPostrouting}),
+			[]string{"-t", constants.TableMangle, "-F", constants.ChainNodeProxyPostrouting}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-F", constants.ChainZTunnelOutput}),
+			[]string{"-t", constants.TableMangle, "-F", constants.ChainNodeProxyOutput}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-F", constants.ChainZTunnelInput}),
+			[]string{"-t", constants.TableMangle, "-F", constants.ChainNodeProxyInput}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableMangle, "-F", constants.ChainZTunnelForward}),
+			[]string{"-t", constants.TableMangle, "-F", constants.ChainNodeProxyForward}),
 	}
 
 	for _, l := range list {
@@ -174,14 +172,14 @@ func (s *Server) cleanRules() {
 			[]string{
 				"-t", constants.TableNat,
 				"-D", constants.ChainPrerouting,
-				"-j", constants.ChainZTunnelPrerouting,
+				"-j", constants.ChainNodeProxyPrerouting,
 			},
 		),
 		newExec(
 			IptablesCmd,
 			[]string{
 				"-t", constants.TableNat,
-				"-X", constants.ChainZTunnelPrerouting,
+				"-X", constants.ChainNodeProxyPrerouting,
 			},
 		),
 		newExec(
@@ -189,14 +187,14 @@ func (s *Server) cleanRules() {
 			[]string{
 				"-t", constants.TableNat,
 				"-D", constants.ChainPostrouting,
-				"-j", constants.ChainZTunnelPostrouting,
+				"-j", constants.ChainNodeProxyPostrouting,
 			},
 		),
 		newExec(
 			IptablesCmd,
 			[]string{
 				"-t", constants.TableNat,
-				"-X", constants.ChainZTunnelPostrouting,
+				"-X", constants.ChainNodeProxyPostrouting,
 			},
 		),
 		newExec(
@@ -204,14 +202,14 @@ func (s *Server) cleanRules() {
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainPrerouting,
-				"-j", constants.ChainZTunnelPrerouting,
+				"-j", constants.ChainNodeProxyPrerouting,
 			},
 		),
 		newExec(
 			IptablesCmd,
 			[]string{
 				"-t", constants.TableMangle,
-				"-X", constants.ChainZTunnelPrerouting,
+				"-X", constants.ChainNodeProxyPrerouting,
 			},
 		),
 		newExec(
@@ -219,14 +217,14 @@ func (s *Server) cleanRules() {
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainPostrouting,
-				"-j", constants.ChainZTunnelPostrouting,
+				"-j", constants.ChainNodeProxyPostrouting,
 			},
 		),
 		newExec(
 			IptablesCmd,
 			[]string{
 				"-t", constants.TableMangle,
-				"-X", constants.ChainZTunnelPostrouting,
+				"-X", constants.ChainNodeProxyPostrouting,
 			},
 		),
 		newExec(
@@ -234,14 +232,14 @@ func (s *Server) cleanRules() {
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainForward,
-				"-j", constants.ChainZTunnelForward,
+				"-j", constants.ChainNodeProxyForward,
 			},
 		),
 		newExec(
 			IptablesCmd,
 			[]string{
 				"-t", constants.TableMangle,
-				"-X", constants.ChainZTunnelForward,
+				"-X", constants.ChainNodeProxyForward,
 			},
 		),
 		newExec(
@@ -249,14 +247,14 @@ func (s *Server) cleanRules() {
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainInput,
-				"-j", constants.ChainZTunnelInput,
+				"-j", constants.ChainNodeProxyInput,
 			},
 		),
 		newExec(
 			IptablesCmd,
 			[]string{
 				"-t", constants.TableMangle,
-				"-X", constants.ChainZTunnelInput,
+				"-X", constants.ChainNodeProxyInput,
 			},
 		),
 		newExec(
@@ -264,14 +262,14 @@ func (s *Server) cleanRules() {
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainOutput,
-				"-j", constants.ChainZTunnelOutput,
+				"-j", constants.ChainNodeProxyOutput,
 			},
 		),
 		newExec(
 			IptablesCmd,
 			[]string{
 				"-t", constants.TableMangle,
-				"-X", constants.ChainZTunnelOutput,
+				"-X", constants.ChainNodeProxyOutput,
 			},
 		),
 	}

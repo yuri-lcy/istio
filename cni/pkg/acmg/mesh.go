@@ -16,12 +16,6 @@ package acmg
 
 import (
 	"encoding/json"
-	"fmt"
-
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-
 	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pkg/config/mesh"
 	"istio.io/istio/pkg/config/mesh/kubemesh"
@@ -63,17 +57,4 @@ func getMeshConfigMapName(revision string) string {
 		return name
 	}
 	return name + "-" + revision
-}
-
-func NamespaceMatchesDisabledSelectors(namespace *corev1.Namespace, selectors []*metav1.LabelSelector) (bool, error) {
-	for _, selector := range selectors {
-		sel, err := metav1.LabelSelectorAsSelector(selector)
-		if err != nil {
-			return false, fmt.Errorf("failed to parse disabled selectors: %v", err)
-		}
-		if sel.Matches(labels.Set(namespace.Labels)) {
-			return true, nil
-		}
-	}
-	return false, nil
 }

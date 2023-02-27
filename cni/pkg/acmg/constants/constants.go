@@ -16,17 +16,17 @@ const (
 	InboundTun  = "istioin"
 	OutboundTun = "istioout"
 
-	InboundTunIP         = "192.168.126.1"
-	ZTunnelInboundTunIP  = "192.168.126.2"
-	OutboundTunIP        = "192.168.127.1"
-	ZTunnelOutboundTunIP = "192.168.127.2"
-	TunPrefix            = 30
+	InboundTunIP           = "192.168.126.1"
+	NodeProxyInboundTunIP  = "192.168.126.2"
+	OutboundTunIP          = "192.168.127.1"
+	NodeProxyOutboundTunIP = "192.168.127.2"
+	TunPrefix              = 30
 
-	ChainZTunnelPrerouting  = "ztunnel-PREROUTING"
-	ChainZTunnelPostrouting = "ztunnel-POSTROUTING"
-	ChainZTunnelInput       = "ztunnel-INPUT"
-	ChainZTunnelOutput      = "ztunnel-OUTPUT"
-	ChainZTunnelForward     = "ztunnel-FORWARD"
+	ChainNodeProxyPrerouting  = "nodeproxy-PREROUTING"
+	ChainNodeProxyPostrouting = "nodeproxy-POSTROUTING"
+	ChainNodeProxyInput       = "nodeproxy-INPUT"
+	ChainNodeProxyOutput      = "nodeproxy-OUTPUT"
+	ChainNodeProxyForward     = "nodeproxy-FORWARD"
 
 	ChainPrerouting  = "PREROUTING"
 	ChainPostrouting = "POSTROUTING"

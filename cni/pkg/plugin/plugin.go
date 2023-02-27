@@ -62,7 +62,7 @@ type Kubernetes struct {
 // is passed in on stdin. Your plugin may wish to expose its functionality via
 // runtime args, see CONVENTIONS.md in the CNI spec.
 type Config struct {
-	types.NetConf           // You may wish to not nest this type
+	types.NetConf // You may wish to not nest this type
 	RuntimeConfig *struct { // SampleConfig map[string]interface{} `json:"sample"`
 	} `json:"runtimeConfig"`
 
@@ -228,10 +228,8 @@ func CmdAdd(args *skel.CmdArgs) (err error) {
 			}
 		}
 		log.Infof("acmgConf.Mode: %s", acmgConf.Mode)
-		log.Infof("acmgConf.ZTunnelReady: %v", acmgConf.NodeProxyReady)
+		log.Infof("acmgConf.NodeProxyReady: %v", acmgConf.NodeProxyReady)
 
-		log.Infof("ambientConf.Mode: %s", ambientConf.Mode)
-		log.Infof("ambientConf.ZTunnelReady: %v", ambientConf.ZTunnelReady)
 		added := false
 		if !excludePod && acmgConf.Mode != acmg.AcmgMeshOff.String() && acmgConf.NodeProxyReady {
 			podIPs, err := getPodIPs(args.IfName, conf.PrevResult)
@@ -245,6 +243,8 @@ func CmdAdd(args *skel.CmdArgs) (err error) {
 				log.Errorf("istio-cni cmdAdd failed to check acmg: %s", err)
 			}
 		}
+		log.Infof("ambientConf.Mode: %s", ambientConf.Mode)
+		log.Infof("ambientConf.ZTunnelReady: %v", ambientConf.ZTunnelReady)
 		if !excludePod && ambientConf.Mode != ambient.AmbientMeshOff.String() && ambientConf.ZTunnelReady {
 			podIPs, err := getPodIPs(args.IfName, conf.PrevResult)
 			if err != nil {

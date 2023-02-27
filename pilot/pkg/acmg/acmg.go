@@ -66,9 +66,6 @@ func (w Workload) Identity() string {
 type WorkloadIndex struct {
 	sync.RWMutex
 
-	ByAllNamespace     map[string][]Workload
-	ByLabeledNamespace map[string][]Workload
-
 	ByNamespacedName  map[types.NamespacedName]Workload
 	ByNode            map[string][]Workload
 	ByIdentity        map[string][]Workload
@@ -82,9 +79,6 @@ type WorkloadIndex struct {
 func NewWorkloadIndex() *WorkloadIndex {
 	// TODO take opts that disable individual indexes if needed
 	return &WorkloadIndex{
-		ByAllNamespace:     map[string][]Workload{},
-		ByLabeledNamespace: map[string][]Workload{},
-
 		ByNamespacedName:  map[types.NamespacedName]Workload{},
 		ByNode:            map[string][]Workload{},
 		ByIdentity:        map[string][]Workload{},

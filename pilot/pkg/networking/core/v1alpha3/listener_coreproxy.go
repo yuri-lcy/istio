@@ -31,13 +31,11 @@ type LabeledWorkloadAndServices struct {
 
 func FindAllResources(push *model.PushContext) ([]LabeledWorkloadAndServices, map[host.Name]*model.Service) {
 	var wls []LabeledWorkloadAndServices
-	for _, ns := range push.AcmgIndex.Workloads.ByLabeledNamespace {
-		for _, wl := range ns {
-			if wl.Labels[acmg.LabelType] != acmg.TypeWorkload {
-				continue
-			}
-			wls = append(wls, LabeledWorkloadAndServices{WorkloadInfo: wl})
+	for _, wl := range push.AcmgIndex.Workloads.ByNamespacedName {
+		if wl.Labels[acmg.LabelType] != acmg.TypeWorkload {
+			continue
 		}
+		wls = append(wls, LabeledWorkloadAndServices{WorkloadInfo: wl})
 	}
 	svcs := map[host.Name]*model.Service{}
 	for i, wl := range wls {
