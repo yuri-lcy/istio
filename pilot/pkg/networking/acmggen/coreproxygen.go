@@ -21,7 +21,6 @@ import (
 	"istio.io/istio/pkg/config/protocol"
 	"istio.io/istio/pkg/proto"
 	"istio.io/istio/pkg/util/sets"
-	"istio.io/pkg/log"
 )
 
 type CoreProxyGenerator struct {
@@ -61,7 +60,7 @@ func getActualWildcardAndLocalHost(node *model.Proxy) string {
 
 // 关于sidecar scope，暂时不考虑
 func (p *CoreProxyGenerator) buildCoreProxyListeners(proxy *model.Proxy, push *model.PushContext) model.Resources {
-	saWorkloads := push.AmbientIndex.Workloads.ByIdentity[proxy.VerifiedIdentity.String()]
+	saWorkloads := push.AcmgIndex.Workloads.ByIdentity[proxy.VerifiedIdentity.String()]
 	if len(saWorkloads) == 0 {
 		log.Warnf("no workloads for sa %s (proxy %s)", proxy.VerifiedIdentity.String(), proxy.ID)
 		return nil

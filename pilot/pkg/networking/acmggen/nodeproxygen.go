@@ -378,7 +378,7 @@ func (g *NodeProxyConfigGenerator) buildInboundCaptureListener(proxy *model.Prox
 				Labels:          workload.Labels,
 			}
 			var allowedIdentities string
-			_, hasWaypoint := push.AmbientIndex.Waypoints.ByIdentity[workload.Identity()]
+			_, hasWaypoint := push.AcmgIndex.CoreProxy.ByIdentity[workload.Identity()]
 			if hasWaypoint {
 				allowedIdentities = strings.TrimPrefix(workload.Identity(), "spiffe://")
 			}
