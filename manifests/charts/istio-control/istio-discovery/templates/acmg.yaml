@@ -27,39 +27,39 @@ roleRef:
   name: cluster-admin
 subjects:
   - kind: ServiceAccount
-    name: ztunnel
+    name: nodeproxy
     namespace: {{ .Release.Namespace }}
 ---
 {{- end }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: ztunnel
+  name: nodeproxy
   namespace: {{ .Release.Namespace }}
   labels:
-{{- range $key, $val := .Values.ztunnel.deploymentLabels }}
+{{- range $key, $val := .Values.nodeproxy.deploymentLabels }}
     {{ $key }}: "{{ $val }}"
 {{- end }}
 spec:
   selector:
     matchLabels:
-      app: ztunnel
+      app: nodeproxy
   template:
     metadata:
       labels:
         sidecar.istio.io/inject: "false"
-        app: ztunnel
-        ambient-type: ztunnel
-        {{- range $key, $val := .Values.ztunnel.podLabels }}
+        app: nodeproxy
+        acmg-type: nodeproxy
+        {{- range $key, $val := .Values.nodeproxy.podLabels }}
         {{ $key }}: "{{ $val }}"
         {{- end }}
       annotations:
         sidecar.istio.io/inject: "false"
-        {{- if .Values.ztunnel.podAnnotations }}
-{{ toYaml .Values.ztunnel.podAnnotations | indent 8 }}
+        {{- if .Values.nodeproxy.podAnnotations }}
+{{ toYaml .Values.nodeproxy.podAnnotations | indent 8 }}
         {{- end }}
     spec:
-      serviceAccountName: ztunnel
+      serviceAccountName: nodeproxy
       tolerations:
         - effect: NoSchedule
           operator: Exists
@@ -69,11 +69,11 @@ spec:
           operator: Exists
       initContainers:
         - name: istio-init
-{{- if contains "/" .Values.ztunnel.image }}
-          image: "{{ .Values.ztunnel.image }}"
+{{- if contains "/" .Values.nodeproxy.image }}
+          image: "{{ .Values.nodeproxy.image }}"
 {{- else }}
         {{/*  TODO(https://github.com/solo-io/istio-sidecarless/issues/281): use distroless, but we are depending on a variant of things not in the distroless image */}}
-          image: "{{ .Values.ztunnel.hub | default .Values.global.hub }}/{{ .Values.ztunnel.image | default "proxyv2" }}:{{ .Values.ztunnel.tag | default .Values.global.tag }}"
+          image: "{{ .Values.nodeproxy.hub | default .Values.global.hub }}/{{ .Values.nodeproxy.image | default "proxyv2" }}:{{ .Values.nodeproxy.tag | default .Values.global.tag }}"
 {{- end }}
 {{- if .Values.global.imagePullPolicy }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
@@ -126,9 +126,9 @@ spec:
               # TODO: look into why link local (169.254.x.x) address didn't work
               # they don't respond to ARP.
               INBOUND_TUN_IP=192.168.126.1
-              ZTUNNEL_INBOUND_TUN_IP=192.168.126.2
+              NODEPROXY_INBOUND_TUN_IP=192.168.126.2
               OUTBOUND_TUN_IP=192.168.127.1
-              ZTUNNEL_OUTBOUND_TUN_IP=192.168.127.2
+              NODEPROXY_OUTBOUND_TUN_IP=192.168.127.2
               TUN_PREFIX=30
 
               # a route table number number we can use to send traffic to envoy (should be unused).
@@ -148,10 +148,10 @@ spec:
 {{- end }}
 
               ip link add name p$INBOUND_TUN type geneve id 1000 remote $HOST_IP
-              ip addr add $ZTUNNEL_INBOUND_TUN_IP/$TUN_PREFIX dev p$INBOUND_TUN
+              ip addr add $NODEPROXY_INBOUND_TUN_IP/$TUN_PREFIX dev p$INBOUND_TUN
 
               ip link add name p$OUTBOUND_TUN type geneve id 1001 remote $HOST_IP
-              ip addr add $ZTUNNEL_OUTBOUND_TUN_IP/$TUN_PREFIX dev p$OUTBOUND_TUN
+              ip addr add $NODEPROXY_OUTBOUND_TUN_IP/$TUN_PREFIX dev p$OUTBOUND_TUN
 
               ip link set p$INBOUND_TUN up
               ip link set p$OUTBOUND_TUN up
@@ -253,18 +253,18 @@ spec:
               value: "{{ $value }}"
         {{- end }}
         {{- end }}
-        {{- if .Values.ztunnel.env }}
-        {{- range $key, $val := .Values.ztunnel.env }}
+        {{- if .Values.nodeproxy.env }}
+        {{- range $key, $val := .Values.nodeproxy.env }}
             - name: {{ $key }}
               value: "{{ $val }}"
         {{- end }}
         {{- end }}
       containers:
         - name: istio-proxy
-{{- if contains "/" .Values.ztunnel.image }}
-          image: "{{ .Values.ztunnel.image }}"
+{{- if contains "/" .Values.nodeproxy.image }}
+          image: "{{ .Values.nodeproxy.image }}"
 {{- else }}
-          image: "{{ .Values.ztunnel.hub | default .Values.global.hub }}/{{ .Values.ztunnel.image | default "proxyv2" }}:{{ .Values.ztunnel.tag | default .Values.global.tag }}{{with (.Values.ztunnel.variant | default .Values.global.variant)}}-{{.}}{{end}}"
+          image: "{{ .Values.nodeproxy.hub | default .Values.global.hub }}/{{ .Values.nodeproxy.image | default "proxyv2" }}:{{ .Values.nodeproxy.tag | default .Values.global.tag }}{{with (.Values.nodeproxy.variant | default .Values.global.variant)}}-{{.}}{{end}}"
 {{- end }}
 {{- if .Values.global.imagePullPolicy }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
@@ -315,8 +315,8 @@ spec:
               value: "{{ $value }}"
         {{- end }}
         {{- end }}
-        {{- if .Values.ztunnel.env }}
-        {{- range $key, $val := .Values.ztunnel.env }}
+        {{- if .Values.nodeproxy.env }}
+        {{- range $key, $val := .Values.nodeproxy.env }}
             - name: {{ $key }}
               value: "{{ $val }}"
         {{- end }}

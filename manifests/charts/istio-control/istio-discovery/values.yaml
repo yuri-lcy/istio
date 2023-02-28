@@ -214,8 +214,9 @@ meshConfig:
 
   ambientMesh:
     mode: "OFF"
+
   acmgMesh:
-    mode: "OFF""
+    mode: "OFF"
 
 global:
   # Used to locate istiod.
@@ -546,3 +547,25 @@ base:
   # it works to have multiple redundant validations, this adds complexity and operational risks.
   # Users should consider enabling this if they want full gateway-api validation but don't have other validation servers.
   validateGateway: false
+
+nodeproxy:
+  hub: ""
+  tag: ""
+  variant: ""
+
+  # Can be a full hub/image:tag
+  image: proxyv2
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2048Mi
+
+  env: {}
+  podAnnotations: {}
+
+  # Additional labels to apply to the deployment.
+  deploymentLabels: {}
+
+  # Additional labels to apply on the pod level for monitoring and logging configuration.
+  podLabels: {}
