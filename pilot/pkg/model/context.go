@@ -718,6 +718,21 @@ func (node *Proxy) IsAmbient() bool {
 	return node.IsWaypointProxy() || node.IsZTunnel()
 }
 
+// IsCoreProxy returns true if the proxy is acting as a coreproxy proxy in an acmg mesh.
+func (node *Proxy) IsCoreProxy() bool {
+	return node.Type == CoreProxy
+}
+
+// IsNodeProxy returns true if the proxy is acting as a nodeproxy in an acmg mesh.
+func (node *Proxy) IsNodeProxy() bool {
+	return node.Type == NodeProxy
+}
+
+// IsAcmg returns true if the proxy is acting as either a nodeproxy or a coreproxy in an acmg mesh.
+func (node *Proxy) IsAcmg() bool {
+	return node.IsCoreProxy() || node.IsNodeProxy()
+}
+
 func (m *BootstrapNodeMetadata) UnmarshalJSON(data []byte) error {
 	// Create a new type from the target type to avoid recursion.
 	type BootstrapNodeMetadata2 BootstrapNodeMetadata

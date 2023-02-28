@@ -10,23 +10,45 @@ import (
 	tls "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	wrappers "google.golang.org/protobuf/types/known/wrapperspb"
+	networking "istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pilot/pkg/acmg"
+	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
 	istionetworking "istio.io/istio/pilot/pkg/networking"
 	"istio.io/istio/pilot/pkg/networking/core/v1alpha3/match"
+	"istio.io/istio/pilot/pkg/networking/plugin/authn"
 	"istio.io/istio/pilot/pkg/networking/util"
 	istiomatcher "istio.io/istio/pilot/pkg/security/authz/matcher"
+	security "istio.io/istio/pilot/pkg/security/model"
 	"istio.io/istio/pilot/pkg/util/protoconv"
 	xdsfilters "istio.io/istio/pilot/pkg/xds/filters"
+	"istio.io/istio/pkg/config"
 	"istio.io/istio/pkg/config/host"
 	"istio.io/istio/pkg/config/labels"
 	"istio.io/istio/pkg/config/protocol"
 	"istio.io/istio/pkg/proto"
+	"istio.io/pkg/log"
+	"strconv"
 )
 
 type LabeledWorkloadAndServices struct {
 	WorkloadInfo acmg.Workload
 	Services     []*model.Service
+}
+
+func getPorts(services []*model.ServiceInstance) []model.Port {
+	p := map[int]model.Port{}
+	for _, s := range services {
+		p[int(s.Endpoint.EndpointPort)] = model.Port{
+			Port:     int(s.Endpoint.EndpointPort),
+			Protocol: s.ServicePort.Protocol,
+		}
+	}
+	pl := []model.Port{}
+	for _, m := range p {
+		pl = append(pl, m)
+	}
+	return pl
 }
 
 func FindAllResources(push *model.PushContext) ([]LabeledWorkloadAndServices, map[host.Name]*model.Service) {
@@ -185,6 +207,130 @@ func (lb *ListenerBuilder) buildCoreProxyInboundPod(wls []LabeledWorkloadAndServ
 	return listeners
 }
 
+func (lb *ListenerBuilder) coreproxyInboundRoute(virtualService config.Config, listenPort int) ([]*route.Route, error) {
+	vs, ok := virtualService.Spec.(*networking.VirtualService)
+	if !ok { // should never happen
+		return nil, fmt.Errorf("in not a virtual service: %#v", virtualService)
+	}
+
+	out := make([]*route.Route, 0, len(vs.Http))
+
+	catchall := false
+	for _, http := range vs.Http {
+		if len(http.Match) == 0 {
+			if r := lb.translateRoute(virtualService, http, nil, listenPort); r != nil {
+				out = append(out, r)
+			}
+			catchall = true
+		} else {
+			for _, match := range http.Match {
+				if r := lb.translateRoute(virtualService, http, match, listenPort); r != nil {
+					out = append(out, r)
+					// This is a catch all path. Routes are matched in order, so we will never go beyond this match
+					// As an optimization, we can just top sending any more routes here.
+					//if isCatchAllMatch(match) {
+					//	catchall = true
+					//	break
+					//}
+				}
+			}
+		}
+		if catchall {
+			break
+		}
+	}
+
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no routes matched")
+	}
+	return out, nil
+}
+
+func buildCoreProxyInboundHTTPRouteConfig(lb *ListenerBuilder, svc *model.Service, cc inboundChainConfig) *route.RouteConfiguration {
+	vss := getConfigsForHost(svc.Hostname, lb.node.SidecarScope.EgressListeners[0].VirtualServices())
+	if len(vss) == 0 {
+		return buildSidecarInboundHTTPRouteConfig(lb, cc)
+	}
+	if len(vss) > 1 {
+		log.Warnf("multiple virtual services for one service: %v", svc.Hostname)
+	}
+	vs := vss[0]
+
+	// Typically we setup routes with the Host header match. However, for coreproxy inbound we are actually using
+	// hostname purely to match to the Service VIP. So we only need a single VHost, with routes compute based on the VS.
+	// For destinations, we need to hit the inbound clusters if it is an internal destination, otherwise outbound.
+	routes, err := lb.coreproxyInboundRoute(vs, int(cc.port.Port))
+	if err != nil {
+		return buildSidecarInboundHTTPRouteConfig(lb, cc)
+	}
+
+	inboundVHost := &route.VirtualHost{
+		Name:    inboundVirtualHostPrefix + strconv.Itoa(int(cc.port.Port)), // Format: "inbound|http|%d"
+		Domains: []string{"*"},
+		Routes:  routes,
+	}
+
+	return &route.RouteConfiguration{
+		Name:             cc.clusterName,
+		VirtualHosts:     []*route.VirtualHost{inboundVHost},
+		ValidateClusters: proto.BoolFalse,
+	}
+}
+
+func (lb *ListenerBuilder) buildCoreProxyInboundVIPHTTPFilters(svc *model.Service, cc inboundChainConfig) []*listener.Filter {
+	var filters []*listener.Filter
+	if !lb.node.IsAcmg() {
+		filters = append(filters, buildMetadataExchangeNetworkFilters(istionetworking.ListenerClassSidecarInbound)...)
+	}
+
+	httpOpts := &httpListenerOpts{
+		routeConfig:      buildCoreProxyInboundHTTPRouteConfig(lb, svc, cc),
+		rds:              "", // no RDS for inbound traffic
+		useRemoteAddress: false,
+		connectionManager: &hcm.HttpConnectionManager{
+			// Append and forward client cert to backend.
+			ForwardClientCertDetails: hcm.HttpConnectionManager_APPEND_FORWARD,
+			SetCurrentClientCertDetails: &hcm.HttpConnectionManager_SetCurrentClientCertDetails{
+				Subject: proto.BoolTrue,
+				Uri:     true,
+				Dns:     true,
+			},
+			ServerName: EnvoyServerName,
+		},
+		protocol:        cc.port.Protocol,
+		class:           istionetworking.ListenerClassSidecarInbound,
+		statPrefix:      cc.StatPrefix(),
+		skipRBACFilters: true, // Handled by pod listener
+	}
+	// See https://github.com/grpc/grpc-web/tree/master/net/grpc/gateway/examples/helloworld#configure-the-proxy
+	if cc.port.Protocol.IsHTTP2() {
+		httpOpts.connectionManager.Http2ProtocolOptions = &core.Http2ProtocolOptions{}
+	}
+
+	if features.HTTP10 || enableHTTP10(lb.node.Metadata.HTTP10) {
+		httpOpts.connectionManager.HttpProtocolOptions = &core.Http1ProtocolOptions{
+			AcceptHttp_10: true,
+		}
+	}
+	h := lb.buildHTTPConnectionManager(httpOpts)
+
+	if lb.node.IsCoreProxy() {
+		restoreTLSFilter := &listener.Filter{
+			Name: "restore_tls",
+			ConfigType: &listener.Filter_TypedConfig{
+				TypedConfig: protoconv.TypedStruct("type.googleapis.com/istio.tls_passthrough.v1.RestoreTLS"),
+			},
+		}
+		filters = append(filters, restoreTLSFilter)
+	}
+
+	filters = append(filters, &listener.Filter{
+		Name:       wellknown.HTTPConnectionManager,
+		ConfigType: &listener.Filter_TypedConfig{TypedConfig: protoconv.MessageToAny(h)},
+	})
+	return filters
+}
+
 // VIP listeners, `inbound||hostname|port`. This will apply service policies. For typical case (not redirecting to external service),
 // this will end up forwarding to a cluster for the same VIP, which will have endpoints for each Pod internal listener
 func (lb *ListenerBuilder) buildCoreProxyInboundVIP(svcs map[host.Name]*model.Service) []*listener.Listener {
@@ -214,7 +360,7 @@ func (lb *ListenerBuilder) buildCoreProxyInboundVIP(svcs map[host.Name]*model.Se
 			cc.clusterName = model.BuildSubsetKey(model.TrafficDirectionInboundVIP, "http", svc.Hostname, port.Port)
 			httpName := name + "-http"
 			httpChain := &listener.FilterChain{
-				Filters: lb.buildWaypointInboundVIPHTTPFilters(svc, cc),
+				Filters: lb.buildCoreProxyInboundVIPHTTPFilters(svc, cc),
 				Name:    httpName,
 			}
 			l := &listener.Listener{
@@ -247,6 +393,31 @@ func (lb *ListenerBuilder) buildCoreProxyInboundVIP(svcs map[host.Name]*model.Se
 		}
 	}
 	return listeners
+}
+
+func buildAcmgCommonTLSContext(proxy *model.Proxy, workload *acmg.Workload, push *model.PushContext, inbound bool) *tls.CommonTlsContext {
+	ctx := &tls.CommonTlsContext{}
+	security.ApplyToCommonTLSContext(ctx, proxy, nil, authn.TrustDomainsForValidation(push.Mesh), inbound)
+
+	// TODO always use the below flow, always specify which workload
+	if workload != nil {
+		// present the workload cert if possible
+		workloadSecret := workload.Identity()
+		if workload.UID != "" {
+			workloadSecret += "~" + workload.Name + "~" + workload.UID
+		}
+		ctx.TlsCertificateSdsSecretConfigs = []*tls.SdsSecretConfig{
+			security.ConstructSdsSecretConfig(workloadSecret),
+		}
+	}
+	ctx.AlpnProtocols = []string{"h2"}
+
+	ctx.TlsParams = &tls.TlsParameters{
+		// Ensure TLS 1.3 is used everywhere
+		TlsMaximumProtocolVersion: tls.TlsParameters_TLSv1_3,
+		TlsMinimumProtocolVersion: tls.TlsParameters_TLSv1_3,
+	}
+	return ctx
 }
 
 // Our top level terminating CONNECT listener, `inbound TERMINATE`. This has a route per destination and decapsulates the CONNECT,
@@ -349,7 +520,7 @@ func (lb *ListenerBuilder) buildCoreProxyInboundTerminateConnect(svcs map[host.N
 				TransportSocket: &core.TransportSocket{
 					Name: "envoy.transport_sockets.tls",
 					ConfigType: &core.TransportSocket_TypedConfig{TypedConfig: protoconv.MessageToAny(&tls.DownstreamTlsContext{
-						CommonTlsContext: buildCommonTLSContext(lb.node, nil, lb.push, true),
+						CommonTlsContext: buildAcmgCommonTLSContext(lb.node, nil, lb.push, true),
 					})},
 				},
 				Filters: []*listener.Filter{

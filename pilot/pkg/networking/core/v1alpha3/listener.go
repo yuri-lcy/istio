@@ -1087,6 +1087,10 @@ type httpListenerOpts struct {
 
 	// Waypoint-specific modifications in HCM
 	isWaypoint bool
+
+	// controls whether or not the filter chain should have telemetry filters.
+	skipTelemetryFilters bool
+	skipRBACFilters      bool
 }
 
 // filterChainOpts describes a filter chain: a set of filters with the same TLS context
