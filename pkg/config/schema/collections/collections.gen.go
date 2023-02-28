@@ -26,6 +26,7 @@ import (
 	k8sioapicorev1 "k8s.io/api/core/v1"
 	k8sioapiextensionsapiserverpkgapisapiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	sigsk8siogatewayapiapisv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+	sigsk8siogatewayapiapisv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 )
 
 var (
@@ -592,118 +593,64 @@ var (
 
 	// K8SGatewayApiV1Beta1Gatewayclasses describes the collection
 	// k8s/gateway_api/v1beta1/gatewayclasses
-	//K8SGatewayApiV1Beta1Gatewayclasses = collection.Builder{
-	//	Name:         "k8s/gateway_api/v1beta1/gatewayclasses",
-	//	VariableName: "K8SGatewayApiV1Beta1Gatewayclasses",
-	//	Resource: resource.Builder{
-	//		Group:   "gateway.networking.k8s.io",
-	//		Kind:    "GatewayClass",
-	//		Plural:  "gatewayclasses",
-	//		Version: "v1beta1",
-	//		VersionAliases: []string{
-	//			"v1alpha2",
-	//		},
-	//		Proto: "k8s.io.gateway_api.api.v1alpha1.GatewayClassSpec", StatusProto: "k8s.io.gateway_api.api.v1alpha1.GatewayClassStatus",
-	//		ReflectType: reflect.TypeOf(&sigsk8siogatewayapiapisv1beta1.GatewayClassSpec{}).Elem(), StatusType: reflect.TypeOf(&sigsk8siogatewayapiapisv1beta1.GatewayClassStatus{}).Elem(),
-	//		ProtoPackage: "sigs.k8s.io/gateway-api/apis/v1beta1", StatusPackage: "sigs.k8s.io/gateway-api/apis/v1beta1",
-	//		ClusterScoped: true,
-	//		ValidateProto: validation.EmptyValidate,
-	//	}.MustBuild(),
-	//}.MustBuild()
-
-	// K8SGatewayApiV1Beta1Gateways describes the collection
-	// k8s/gateway_api/v1beta1/gateways
-	//K8SGatewayApiV1Beta1Gateways = collection.Builder{
-	//	Name:         "k8s/gateway_api/v1beta1/gateways",
-	//	VariableName: "K8SGatewayApiV1Beta1Gateways",
-	//	Resource: resource.Builder{
-	//		Group:   "gateway.networking.k8s.io",
-	//		Kind:    "Gateway",
-	//		Plural:  "gateways",
-	//		Version: "v1beta1",
-	//		VersionAliases: []string{
-	//			"v1alpha2",
-	//		},
-	//		Proto: "k8s.io.gateway_api.api.v1alpha1.GatewaySpec", StatusProto: "k8s.io.gateway_api.api.v1alpha1.GatewayStatus",
-	//		ReflectType: reflect.TypeOf(&sigsk8siogatewayapiapisv1beta1.GatewaySpec{}).Elem(), StatusType: reflect.TypeOf(&sigsk8siogatewayapiapisv1beta1.GatewayStatus{}).Elem(),
-	//		ProtoPackage: "sigs.k8s.io/gateway-api/apis/v1beta1", StatusPackage: "sigs.k8s.io/gateway-api/apis/v1beta1",
-	//		ClusterScoped: false,
-	//		ValidateProto: validation.EmptyValidate,
-	//	}.MustBuild(),
-	//}.MustBuild()
-
-	// K8SGatewayApiV1Beta1Httproutes describes the collection
-	// k8s/gateway_api/v1beta1/httproutes
-	//K8SGatewayApiV1Beta1Httproutes = collection.Builder{
-	//	Name:         "k8s/gateway_api/v1beta1/httproutes",
-	//	VariableName: "K8SGatewayApiV1Beta1Httproutes",
-	//	Resource: resource.Builder{
-	//		Group:   "gateway.networking.k8s.io",
-	//		Kind:    "HTTPRoute",
-	//		Plural:  "httproutes",
-	//		Version: "v1beta1",
-	//		VersionAliases: []string{
-	//			"v1alpha2",
-	//		},
-	//		Proto: "k8s.io.gateway_api.api.v1alpha1.HTTPRouteSpec", StatusProto: "k8s.io.gateway_api.api.v1alpha1.HTTPRouteStatus",
-	//		ReflectType: reflect.TypeOf(&sigsk8siogatewayapiapisv1beta1.HTTPRouteSpec{}).Elem(), StatusType: reflect.TypeOf(&sigsk8siogatewayapiapisv1beta1.HTTPRouteStatus{}).Elem(),
-	//		ProtoPackage: "sigs.k8s.io/gateway-api/apis/v1beta1", StatusPackage: "sigs.k8s.io/gateway-api/apis/v1beta1",
-	//		ClusterScoped: false,
-	//		ValidateProto: validation.EmptyValidate,
-	//	}.MustBuild(),
-	//}.MustBuild()
-
-	// K8SGatewayApiV1Alpha2Httproutes describes the collection
-	// k8s/gateway_api/v1alpha2/httproutes
-	K8SGatewayApiV1Alpha2Httproutes = collection.Builder{
-		Name:         "k8s/gateway_api/v1alpha2/httproutes",
-		VariableName: "K8SGatewayApiV1Alpha2Httproutes",
-		Resource: resource.Builder{
-			Group:   "gateway.networking.k8s.io",
-			Kind:    "HTTPRoute",
-			Plural:  "httproutes",
-			Version: "v1alpha2",
-			Proto:   "k8s.io.gateway_api.api.v1alpha1.HTTPRouteSpec", StatusProto: "k8s.io.gateway_api.api.v1alpha1.HTTPRouteStatus",
-			ReflectType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.HTTPRouteSpec{}).Elem(), StatusType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.HTTPRouteStatus{}).Elem(),
-			ProtoPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2", StatusPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2",
-			ClusterScoped: false,
-			ValidateProto: validation.ValidateKubernetesGateway,
-		}.MustBuild(),
-	}.MustBuild()
-
-	// K8SGatewayApiV1Alpha2Gatewayclasses describes the collection
-	// k8s/gateway_api/v1alpha2/gatewayclasses
-	K8SGatewayApiV1Alpha2Gatewayclasses = collection.Builder{
-		Name:         "k8s/gateway_api/v1alpha2/gatewayclasses",
-		VariableName: "K8SGatewayApiV1Alpha2Gatewayclasses",
+	K8SGatewayApiV1Beta1Gatewayclasses = collection.Builder{
+		Name:         "k8s/gateway_api/v1beta1/gatewayclasses",
+		VariableName: "K8SGatewayApiV1Beta1Gatewayclasses",
 		Resource: resource.Builder{
 			Group:   "gateway.networking.k8s.io",
 			Kind:    "GatewayClass",
 			Plural:  "gatewayclasses",
-			Version: "v1alpha2",
-			Proto:   "k8s.io.gateway_api.api.v1alpha1.GatewayClassSpec", StatusProto: "k8s.io.gateway_api.api.v1alpha1.GatewayClassStatus",
-			ReflectType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.GatewayClassSpec{}).Elem(), StatusType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.GatewayClassStatus{}).Elem(),
-			ProtoPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2", StatusPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2",
+			Version: "v1beta1",
+			VersionAliases: []string{
+				"v1alpha2",
+			},
+			Proto: "k8s.io.gateway_api.api.v1alpha1.GatewayClassSpec", StatusProto: "k8s.io.gateway_api.api.v1alpha1.GatewayClassStatus",
+			ReflectType: reflect.TypeOf(&sigsk8siogatewayapiapisv1beta1.GatewayClassSpec{}).Elem(), StatusType: reflect.TypeOf(&sigsk8siogatewayapiapisv1beta1.GatewayClassStatus{}).Elem(),
+			ProtoPackage: "sigs.k8s.io/gateway-api/apis/v1beta1", StatusPackage: "sigs.k8s.io/gateway-api/apis/v1beta1",
 			ClusterScoped: true,
 			ValidateProto: validation.EmptyValidate,
 		}.MustBuild(),
 	}.MustBuild()
 
-	// K8SGatewayApiV1Alpha2Gateways describes the collection
-	// k8s/gateway_api/v1alpha2/gateways
-	K8SGatewayApiV1Alpha2Gateways = collection.Builder{
-		Name:         "k8s/gateway_api/v1alpha2/gateways",
-		VariableName: "K8SGatewayApiV1Alpha2Gateways",
+	// K8SGatewayApiV1Beta1Gateways describes the collection
+	// k8s/gateway_api/v1beta1/gateways
+	K8SGatewayApiV1Beta1Gateways = collection.Builder{
+		Name:         "k8s/gateway_api/v1beta1/gateways",
+		VariableName: "K8SGatewayApiV1Beta1Gateways",
 		Resource: resource.Builder{
 			Group:   "gateway.networking.k8s.io",
 			Kind:    "Gateway",
 			Plural:  "gateways",
-			Version: "v1alpha2",
-			Proto:   "k8s.io.gateway_api.api.v1alpha1.GatewaySpec", StatusProto: "k8s.io.gateway_api.api.v1alpha1.GatewayStatus",
-			ReflectType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.GatewaySpec{}).Elem(), StatusType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.GatewayStatus{}).Elem(),
-			ProtoPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2", StatusPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2",
+			Version: "v1beta1",
+			VersionAliases: []string{
+				"v1alpha2",
+			},
+			Proto: "k8s.io.gateway_api.api.v1alpha1.GatewaySpec", StatusProto: "k8s.io.gateway_api.api.v1alpha1.GatewayStatus",
+			ReflectType: reflect.TypeOf(&sigsk8siogatewayapiapisv1beta1.GatewaySpec{}).Elem(), StatusType: reflect.TypeOf(&sigsk8siogatewayapiapisv1beta1.GatewayStatus{}).Elem(),
+			ProtoPackage: "sigs.k8s.io/gateway-api/apis/v1beta1", StatusPackage: "sigs.k8s.io/gateway-api/apis/v1beta1",
 			ClusterScoped: false,
-			ValidateProto: validation.ValidateHTTPRoute,
+			ValidateProto: validation.EmptyValidate,
+		}.MustBuild(),
+	}.MustBuild()
+
+	// K8SGatewayApiV1Beta1Httproutes describes the collection
+	// k8s/gateway_api/v1beta1/httproutes
+	K8SGatewayApiV1Beta1Httproutes = collection.Builder{
+		Name:         "k8s/gateway_api/v1beta1/httproutes",
+		VariableName: "K8SGatewayApiV1Beta1Httproutes",
+		Resource: resource.Builder{
+			Group:   "gateway.networking.k8s.io",
+			Kind:    "HTTPRoute",
+			Plural:  "httproutes",
+			Version: "v1beta1",
+			VersionAliases: []string{
+				"v1alpha2",
+			},
+			Proto: "k8s.io.gateway_api.api.v1alpha1.HTTPRouteSpec", StatusProto: "k8s.io.gateway_api.api.v1alpha1.HTTPRouteStatus",
+			ReflectType: reflect.TypeOf(&sigsk8siogatewayapiapisv1beta1.HTTPRouteSpec{}).Elem(), StatusType: reflect.TypeOf(&sigsk8siogatewayapiapisv1beta1.HTTPRouteStatus{}).Elem(),
+			ProtoPackage: "sigs.k8s.io/gateway-api/apis/v1beta1", StatusPackage: "sigs.k8s.io/gateway-api/apis/v1beta1",
+			ClusterScoped: false,
+			ValidateProto: validation.EmptyValidate,
 		}.MustBuild(),
 	}.MustBuild()
 
@@ -757,12 +704,9 @@ var (
 		MustAdd(K8SGatewayApiV1Alpha2Referencegrants).
 		MustAdd(K8SGatewayApiV1Alpha2Tcproutes).
 		MustAdd(K8SGatewayApiV1Alpha2Tlsroutes).
-		//MustAdd(K8SGatewayApiV1Beta1Gatewayclasses).
-		//MustAdd(K8SGatewayApiV1Beta1Gateways).
-		//MustAdd(K8SGatewayApiV1Beta1Httproutes).
-		MustAdd(K8SGatewayApiV1Alpha2Gatewayclasses).
-		MustAdd(K8SGatewayApiV1Alpha2Gateways).
-		MustAdd(K8SGatewayApiV1Alpha2Httproutes).
+		MustAdd(K8SGatewayApiV1Beta1Gatewayclasses).
+		MustAdd(K8SGatewayApiV1Beta1Gateways).
+		MustAdd(K8SGatewayApiV1Beta1Httproutes).
 		Build()
 
 	// Istio contains only Istio collections.
@@ -801,12 +745,9 @@ var (
 		MustAdd(K8SGatewayApiV1Alpha2Referencegrants).
 		MustAdd(K8SGatewayApiV1Alpha2Tcproutes).
 		MustAdd(K8SGatewayApiV1Alpha2Tlsroutes).
-		//MustAdd(K8SGatewayApiV1Beta1Gatewayclasses).
-		//MustAdd(K8SGatewayApiV1Beta1Gateways).
-		//MustAdd(K8SGatewayApiV1Beta1Httproutes).
-		MustAdd(K8SGatewayApiV1Alpha2Gatewayclasses).
-		MustAdd(K8SGatewayApiV1Alpha2Gateways).
-		MustAdd(K8SGatewayApiV1Alpha2Httproutes).
+		MustAdd(K8SGatewayApiV1Beta1Gatewayclasses).
+		MustAdd(K8SGatewayApiV1Beta1Gateways).
+		MustAdd(K8SGatewayApiV1Beta1Httproutes).
 		Build()
 
 	// Builtin contains only native Kubernetes collections. This differs from Kube, which has
@@ -846,32 +787,29 @@ var (
 
 	// PilotGatewayAPI contains only collections used by Pilot, including experimental Service Api.
 	PilotGatewayAPI = collection.NewSchemasBuilder().
-		MustAdd(IstioExtensionsV1Alpha1Wasmplugins).
-		MustAdd(IstioNetworkingV1Alpha3Destinationrules).
-		MustAdd(IstioNetworkingV1Alpha3Envoyfilters).
-		MustAdd(IstioNetworkingV1Alpha3Gateways).
-		MustAdd(IstioNetworkingV1Alpha3Serviceentries).
-		MustAdd(IstioNetworkingV1Alpha3Sidecars).
-		MustAdd(IstioNetworkingV1Alpha3Virtualservices).
-		MustAdd(IstioNetworkingV1Alpha3Workloadentries).
-		MustAdd(IstioNetworkingV1Alpha3Workloadgroups).
-		MustAdd(IstioNetworkingV1Beta1Proxyconfigs).
-		MustAdd(IstioSecurityV1Beta1Authorizationpolicies).
-		MustAdd(IstioSecurityV1Beta1Peerauthentications).
-		MustAdd(IstioSecurityV1Beta1Requestauthentications).
-		MustAdd(IstioTelemetryV1Alpha1Telemetries).
-		MustAdd(K8SGatewayApiV1Alpha2Referencegrants).
-		MustAdd(K8SGatewayApiV1Alpha2Tcproutes).
-		MustAdd(K8SGatewayApiV1Alpha2Tlsroutes).
-		MustAdd(K8SGatewayApiV1Alpha2Gatewayclasses).
-		MustAdd(K8SGatewayApiV1Alpha2Gateways).
-		MustAdd(K8SGatewayApiV1Alpha2Httproutes).
-		//MustAdd(K8SGatewayApiV1Beta1Gatewayclasses).
-		//MustAdd(K8SGatewayApiV1Beta1Gateways).
-		//MustAdd(K8SGatewayApiV1Beta1Httproutes).
-		Build()
+			MustAdd(IstioExtensionsV1Alpha1Wasmplugins).
+			MustAdd(IstioNetworkingV1Alpha3Destinationrules).
+			MustAdd(IstioNetworkingV1Alpha3Envoyfilters).
+			MustAdd(IstioNetworkingV1Alpha3Gateways).
+			MustAdd(IstioNetworkingV1Alpha3Serviceentries).
+			MustAdd(IstioNetworkingV1Alpha3Sidecars).
+			MustAdd(IstioNetworkingV1Alpha3Virtualservices).
+			MustAdd(IstioNetworkingV1Alpha3Workloadentries).
+			MustAdd(IstioNetworkingV1Alpha3Workloadgroups).
+			MustAdd(IstioNetworkingV1Beta1Proxyconfigs).
+			MustAdd(IstioSecurityV1Beta1Authorizationpolicies).
+			MustAdd(IstioSecurityV1Beta1Peerauthentications).
+			MustAdd(IstioSecurityV1Beta1Requestauthentications).
+			MustAdd(IstioTelemetryV1Alpha1Telemetries).
+			MustAdd(K8SGatewayApiV1Alpha2Referencegrants).
+			MustAdd(K8SGatewayApiV1Alpha2Tcproutes).
+			MustAdd(K8SGatewayApiV1Alpha2Tlsroutes).
+			MustAdd(K8SGatewayApiV1Beta1Gatewayclasses).
+			MustAdd(K8SGatewayApiV1Beta1Gateways).
+			MustAdd(K8SGatewayApiV1Beta1Httproutes).
+			Build()
 
 	// Deprecated contains only collections used by that will soon be used by nothing.
 	Deprecated = collection.NewSchemasBuilder().
-		Build()
+			Build()
 )

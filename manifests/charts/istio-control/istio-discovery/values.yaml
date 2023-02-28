@@ -14,7 +14,7 @@ pilot:
   variant: ""
 
   # Can be a full hub/image:tag
-  image: pilot
+  image: acmg-registry.us-west-1.cr.aliyuncs.com/istio-testing/pilot:0.1
   traceSampling: 1.0
 
   # Resources for a small pilot install
@@ -554,7 +554,7 @@ nodeproxy:
   variant: ""
 
   # Can be a full hub/image:tag
-  image: proxyv2
+  image: acmg-registry.us-west-1.cr.aliyuncs.com/istio-testing/proxyv2:0.1
 
   resources:
     requests:
