@@ -15,12 +15,12 @@
 package acmggen
 
 import (
+	"istio.io/istio/pilot/pkg/acmg"
 	"strings"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 
-	"istio.io/istio/pilot/pkg/ambient"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/util/protoconv"
 	"istio.io/istio/pkg/kube/labels"
@@ -36,7 +36,7 @@ const (
 // configurations. These configurations include workload metadata for individual
 // workload instances (Kubernetes pods) running on a Kubernetes node.
 type WorkloadMetadataGenerator struct {
-	Workloads ambient.Cache
+	Workloads acmg.AcmgCache
 }
 
 var _ model.XdsResourceGenerator = &WorkloadMetadataGenerator{}
@@ -53,7 +53,7 @@ func (g *WorkloadMetadataGenerator) Generate(proxy *model.Proxy, w *model.Watche
 
 	var workloads []*wmpb.WorkloadMetadataResource
 
-	for _, wl := range g.Workloads.AmbientWorkloads().Workloads.ByNode[proxyKubernetesNodeName] {
+	for _, wl := range g.Workloads.AcmgWorkloads().Workloads.ByNode[proxyKubernetesNodeName] {
 		// TODO: this is cheating. we need a way to get the owing workload name
 		// in a way that isn't a shortcut.
 		name, workloadType := workloadNameAndType(wl)
@@ -87,7 +87,7 @@ func (g *WorkloadMetadataGenerator) Generate(proxy *model.Proxy, w *model.Watche
 }
 
 // total hack
-func workloadNameAndType(wl ambient.Workload) (string, wmpb.WorkloadMetadataResource_WorkloadType) {
+func workloadNameAndType(wl acmg.Workload) (string, wmpb.WorkloadMetadataResource_WorkloadType) {
 	if len(wl.GenerateName) == 0 {
 		return wl.Name, wmpb.WorkloadMetadataResource_KUBERNETES_POD
 	}
