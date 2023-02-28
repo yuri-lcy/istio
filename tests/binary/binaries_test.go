@@ -39,7 +39,6 @@ func TestMain(m *testing.M) {
 }
 
 func TestVersion(t *testing.T) {
-	t.Skip("https://github.com/solo-io/istio-sidecarless/issues/84")
 	runBinariesTest(t, func(t *testing.T, name string) {
 		cmd := path.Join(*releasedir, name)
 		args := []string{"version", "-ojson"}
@@ -93,16 +92,13 @@ func TestBinarySizes(t *testing.T) {
 		// TODO: shrink the ranges here once the active work to reduce binary size is complete
 		// For now, having two small a range will result in lots of "merge conflicts"
 		"istioctl":    {60, 100},
-		"pilot-agent": {30, 45},
+		"pilot-agent": {30, 50},
 		// TODO(https://github.com/kubernetes/kubernetes/issues/101384) bump this down a bit?
 		"pilot-discovery": {60, 95},
 		"bug-report":      {60, 100},
 	}
 
 	runBinariesTest(t, func(t *testing.T, name string) {
-		if name == "pilot-agent" {
-			t.Skip("https://github.com/solo-io/istio-sidecarless/issues/85")
-		}
 		tt, f := cases[name]
 		if !f {
 			t.Fatalf("min/max binary size not specified for %v", name)

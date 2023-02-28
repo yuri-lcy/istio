@@ -73,8 +73,7 @@ const (
 	// nolint: revive
 	connectTimeoutMin = time.Millisecond
 
-	drainTimeMax          = time.Hour
-	parentShutdownTimeMax = time.Hour
+	drainTimeMax = time.Hour
 
 	// UnixAddressPrefix is the prefix used to indicate an address is for a Unix Domain socket. It is used in
 	// ServiceEntry.Endpoint.Address message.
@@ -373,15 +372,25 @@ func ValidateHTTPHeaderOperationName(name string) error {
 	return nil
 }
 
+// Copy from https://github.com/bufbuild/protoc-gen-validate/blob/a65858624dd654f2fb306d6af60f737132986f44/module/checker.go#L18
+var httpHeaderValueRegexp = regexp.MustCompile("^[^\u0000-\u0008\u000A-\u001F\u007F]*$")
+
 // ValidateHTTPHeaderValue validates a header value for Envoy
 // Valid: "foo", "%HOSTNAME%", "100%%", "prefix %HOSTNAME% suffix"
-// Invalid: "abc%123"
+// Invalid: "abc%123", "%START_TIME%%"
 // We don't try to check that what is inside the %% is one of Envoy recognized values, we just prevent invalid config.
 // See: https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_conn_man/headers.html#custom-request-response-headers
 func ValidateHTTPHeaderValue(value string) error {
-	if strings.Count(value, "%")%2 != 0 {
-		return errors.New("single % not allowed.  Escape by doubling to %% or encase Envoy variable name in pair of %")
+	if !httpHeaderValueRegexp.MatchString(value) {
+		return fmt.Errorf("header value configuration %s is invalid", value)
 	}
+
+	if err := validateHeaderValue(value); err != nil {
+		return fmt.Errorf("header value configuration: %w", err)
+	}
+
+	// TODO: find a better way to validate fileds supported in custom header, e.g %ENVIRONMENT(X):Z%
+
 	return nil
 }
 
@@ -738,7 +747,7 @@ func validateExportTo(namespace string, exportTo []string, isServiceEntry bool, 
 		// Make sure workloadSelector based destination rule does not use exportTo other than current namespace
 		if isDestinationRuleWithSelector && !exportToSet.IsEmpty() {
 			if exportToSet.Contains(namespace) {
-				if len(exportToSet) > 1 {
+				if exportToSet.Len() > 1 {
 					errs = appendErrors(errs, fmt.Errorf("destination rule with workload selector cannot have multiple entries in exportTo"))
 				}
 			} else {
@@ -1054,6 +1063,11 @@ func validateSidecarOrGatewayHostnamePart(hostname string, isGateway bool) (errs
 			errs = appendErrors(errs, err)
 		}
 	}
+	// partial wildcard is not allowed
+	// More details please refer to:
+	// Gateway: https://istio.io/latest/docs/reference/config/networking/gateway/
+	// SideCar: https://istio.io/latest/docs/reference/config/networking/sidecar/#IstioEgressListener
+	errs = appendErrors(errs, validatePartialWildCard(hostname))
 	return
 }
 
@@ -1577,46 +1591,26 @@ func ValidateDurationRange(dur, min, max time.Duration) error {
 	return nil
 }
 
-// ValidateParentAndDrain checks that parent and drain durations are valid
-func ValidateParentAndDrain(drainTime, parentShutdown *durationpb.Duration) (errs error) {
+// ValidateDrainDuration checks that parent and drain durations are valid
+func ValidateDrainDuration(drainTime *durationpb.Duration) (errs error) {
 	if err := ValidateDuration(drainTime); err != nil {
 		errs = multierror.Append(errs, multierror.Prefix(err, "invalid drain duration:"))
-	}
-	if err := ValidateDuration(parentShutdown); err != nil {
-		errs = multierror.Append(errs, multierror.Prefix(err, "invalid parent shutdown duration:"))
 	}
 	if errs != nil {
 		return
 	}
 
 	drainDuration := drainTime.AsDuration()
-	parentShutdownDuration := parentShutdown.AsDuration()
 
 	if drainDuration%time.Second != 0 {
 		errs = multierror.Append(errs,
 			errors.New("drain time only supports durations to seconds precision"))
-	}
-	if parentShutdownDuration%time.Second != 0 {
-		errs = multierror.Append(errs,
-			errors.New("parent shutdown time only supports durations to seconds precision"))
-	}
-	if parentShutdownDuration <= drainDuration {
-		errs = multierror.Append(errs,
-			fmt.Errorf("parent shutdown time %v must be greater than drain time %v",
-				parentShutdownDuration.String(), drainDuration.String()))
 	}
 
 	if drainDuration > drainTimeMax {
 		errs = multierror.Append(errs,
 			fmt.Errorf("drain time %v must be <%v", drainDuration.String(), drainTimeMax.String()))
 	}
-
-	if parentShutdownDuration > parentShutdownTimeMax {
-		errs = multierror.Append(errs,
-			fmt.Errorf("parent shutdown time %v must be <%v",
-				parentShutdownDuration.String(), parentShutdownTimeMax.String()))
-	}
-
 	return
 }
 
@@ -1770,6 +1764,18 @@ func validatePrivateKeyProvider(pkpConf *meshconfig.PrivateKeyProvider) error {
 				errs = multierror.Append(errs, errors.New("pollDelay must be non zero"))
 			}
 		}
+	case *meshconfig.PrivateKeyProvider_Qat:
+		qatConf := pkpConf.GetQat()
+		if qatConf == nil {
+			errs = multierror.Append(errs, errors.New("qat confguration is required"))
+		} else {
+			pollDelay := qatConf.GetPollDelay()
+			if pollDelay == nil {
+				errs = multierror.Append(errs, errors.New("pollDelay is required"))
+			} else if pollDelay.GetSeconds() == 0 && pollDelay.GetNanos() == 0 {
+				errs = multierror.Append(errs, errors.New("pollDelay must be non zero"))
+			}
+		}
 	default:
 		errs = multierror.Append(errs, errors.New("unknown private key provider"))
 	}
@@ -1798,8 +1804,8 @@ func ValidateMeshConfigProxyConfig(config *meshconfig.ProxyConfig) (errs error) 
 		errs = multierror.Append(errs, errors.New("oneof service cluster or tracing service name must be specified"))
 	}
 
-	if err := ValidateParentAndDrain(config.DrainDuration, config.ParentShutdownDuration); err != nil {
-		errs = multierror.Append(errs, multierror.Prefix(err, "invalid parent and drain time combination"))
+	if err := ValidateDrainDuration(config.DrainDuration); err != nil {
+		errs = multierror.Append(errs, err)
 	}
 
 	// discovery address is mandatory since mutual TLS relies on CDS.
@@ -1917,6 +1923,7 @@ func validateWorkloadSelector(selector *type_beta.WorkloadSelector) error {
 // ValidateAuthorizationPolicy checks that AuthorizationPolicy is well-formed.
 var ValidateAuthorizationPolicy = registerValidateFunc("ValidateAuthorizationPolicy",
 	func(cfg config.Config) (Warning, error) {
+		var warning Warning
 		in, ok := cfg.Spec.(*security_beta.AuthorizationPolicy)
 		if !ok {
 			return nil, fmt.Errorf("cannot cast to AuthorizationPolicy")
@@ -1978,6 +1985,10 @@ var ValidateAuthorizationPolicy = registerValidateFunc("ValidateAuthorizationPol
 			if rule.From != nil && len(rule.From) == 0 {
 				errs = appendErrors(errs, fmt.Errorf("`from` must not be empty, found at rule %d", i))
 			}
+			tcpRulesInFrom := false
+			tcpRulesInTo := false
+			fromRuleExist := false
+			toRuleExist := false
 			for _, from := range rule.From {
 				if from == nil {
 					errs = appendErrors(errs, fmt.Errorf("`from` must not be nil, found at rule %d", i))
@@ -1986,6 +1997,7 @@ var ValidateAuthorizationPolicy = registerValidateFunc("ValidateAuthorizationPol
 				if from.Source == nil {
 					errs = appendErrors(errs, fmt.Errorf("`from.source` must not be nil, found at rule %d", i))
 				} else {
+					fromRuleExist = true
 					src := from.Source
 					if len(src.Principals) == 0 && len(src.RequestPrincipals) == 0 && len(src.Namespaces) == 0 && len(src.IpBlocks) == 0 &&
 						len(src.RemoteIpBlocks) == 0 && len(src.NotPrincipals) == 0 && len(src.NotRequestPrincipals) == 0 && len(src.NotNamespaces) == 0 &&
@@ -2006,6 +2018,11 @@ var ValidateAuthorizationPolicy = registerValidateFunc("ValidateAuthorizationPol
 					errs = appendErrors(errs, security.CheckEmptyValues("NotNamespaces", src.NotNamespaces))
 					errs = appendErrors(errs, security.CheckEmptyValues("NotIpBlocks", src.NotIpBlocks))
 					errs = appendErrors(errs, security.CheckEmptyValues("NotRemoteIpBlocks", src.NotRemoteIpBlocks))
+					if src.NotPrincipals != nil || src.Principals != nil || src.IpBlocks != nil ||
+						src.NotIpBlocks != nil || src.Namespaces != nil ||
+						src.NotNamespaces != nil || src.RemoteIpBlocks != nil || src.NotRemoteIpBlocks != nil {
+						tcpRulesInFrom = true
+					}
 				}
 			}
 			if rule.To != nil && len(rule.To) == 0 {
@@ -2019,6 +2036,7 @@ var ValidateAuthorizationPolicy = registerValidateFunc("ValidateAuthorizationPol
 				if to.Operation == nil {
 					errs = appendErrors(errs, fmt.Errorf("`to.operation` must not be nil, found at rule %d", i))
 				} else {
+					toRuleExist = true
 					op := to.Operation
 					if len(op.Ports) == 0 && len(op.Methods) == 0 && len(op.Paths) == 0 && len(op.Hosts) == 0 &&
 						len(op.NotPorts) == 0 && len(op.NotMethods) == 0 && len(op.NotPaths) == 0 && len(op.NotHosts) == 0 {
@@ -2034,6 +2052,9 @@ var ValidateAuthorizationPolicy = registerValidateFunc("ValidateAuthorizationPol
 					errs = appendErrors(errs, security.CheckEmptyValues("NotMethods", op.NotMethods))
 					errs = appendErrors(errs, security.CheckEmptyValues("NotPaths", op.NotPaths))
 					errs = appendErrors(errs, security.CheckEmptyValues("NotHosts", op.NotHosts))
+					if op.Ports != nil || op.NotPorts != nil {
+						tcpRulesInTo = true
+					}
 				}
 			}
 			for _, condition := range rule.GetWhen() {
@@ -2054,8 +2075,15 @@ var ValidateAuthorizationPolicy = registerValidateFunc("ValidateAuthorizationPol
 					}
 				}
 			}
+
+			if ((fromRuleExist && !toRuleExist && !tcpRulesInFrom) || (toRuleExist && !tcpRulesInTo)) &&
+				in.Action == security_beta.AuthorizationPolicy_DENY {
+				warning = fmt.Errorf("configured AuthorizationPolicy will deny all traffic " +
+					"to TCP ports under its scope due to the use of only HTTP attributes in a DENY rule; " +
+					"it is recommended to explicitly specify the port")
+			}
 		}
-		return nil, multierror.Prefix(errs, fmt.Sprintf("invalid policy %s.%s:", cfg.Name, cfg.Namespace))
+		return warning, multierror.Prefix(errs, fmt.Sprintf("invalid policy %s.%s:", cfg.Name, cfg.Namespace))
 	})
 
 // ValidateRequestAuthentication checks that request authentication spec is well-formed.
@@ -2114,6 +2142,20 @@ func validateJwtRule(rule *security_beta.JWTRule) (errs error) {
 	for _, location := range rule.FromParams {
 		if len(location) == 0 {
 			errs = multierror.Append(errs, errors.New("location query must be non-empty string"))
+		}
+	}
+
+	for _, claimAndHeaders := range rule.OutputClaimToHeaders {
+		if claimAndHeaders == nil {
+			errs = multierror.Append(errs, errors.New("outputClaimToHeaders must not be null"))
+			continue
+		}
+		if claimAndHeaders.Claim == "" || claimAndHeaders.Header == "" {
+			errs = multierror.Append(errs, errors.New("outputClaimToHeaders header and claim value must be non-empty string"))
+			continue
+		}
+		if err := ValidateHTTPHeaderValue(claimAndHeaders.Header); err != nil {
+			errs = multierror.Append(errs, err)
 		}
 	}
 	return
@@ -3327,6 +3369,10 @@ var ValidateServiceEntry = registerValidateFunc("ValidateServiceEntry",
 					}
 				}
 			}
+			if serviceEntry.Resolution == networking.ServiceEntry_DNS_ROUND_ROBIN && len(serviceEntry.Endpoints) > 1 {
+				errs = appendValidation(errs,
+					fmt.Errorf("there must only be 0 or 1 endpoint for resolution mode %s", serviceEntry.Resolution))
+			}
 
 			for _, endpoint := range serviceEntry.Endpoints {
 				if !netutil.IsValidIPAddress(endpoint.Address) {
@@ -3763,7 +3809,7 @@ func validateTelemetryMetrics(metrics []*telemetry.Metrics) (v Validation) {
 				switch to.Operation {
 				case telemetry.MetricsOverrides_TagOverride_UPSERT:
 					if to.Value == "" {
-						v = appendErrorf(v, "tagOverrides.value must be set set when operation is UPSERT")
+						v = appendErrorf(v, "tagOverrides.value must be set when operation is UPSERT")
 					}
 				case telemetry.MetricsOverrides_TagOverride_REMOVE:
 					if to.Value != "" {
@@ -3881,6 +3927,13 @@ func validateWasmPluginMatch(selectors []*extensions.WasmPlugin_TrafficSelector)
 				return fmt.Errorf("spec.Match[%d].Ports[%d] is out of range: %d", selIdx, portIdx, port.GetNumber())
 			}
 		}
+	}
+	return nil
+}
+
+func validatePartialWildCard(host string) error {
+	if strings.Contains(host, "*") && len(host) != 1 && !strings.HasPrefix(host, "*.") {
+		return fmt.Errorf("partial wildcard %q not allowed", host)
 	}
 	return nil
 }

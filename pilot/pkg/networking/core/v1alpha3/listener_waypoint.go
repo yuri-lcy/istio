@@ -16,8 +16,12 @@ package v1alpha3
 
 import (
 	"fmt"
+	"net/netip"
 	"strconv"
+	"time"
 
+	xds "github.com/cncf/xds/go/xds/core/v3"
+	matcher "github.com/cncf/xds/go/xds/type/matcher/v3"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listener "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
@@ -26,19 +30,20 @@ import (
 	tls "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	any "google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/durationpb"
 	wrappers "google.golang.org/protobuf/types/known/wrapperspb"
 
+	extensions "istio.io/api/extensions/v1alpha1"
 	networking "istio.io/api/networking/v1alpha3"
-	"istio.io/istio/pilot/pkg/ambient"
 	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
 	istionetworking "istio.io/istio/pilot/pkg/networking"
+	"istio.io/istio/pilot/pkg/networking/core/v1alpha3/extension"
 	"istio.io/istio/pilot/pkg/networking/core/v1alpha3/match"
 	istio_route "istio.io/istio/pilot/pkg/networking/core/v1alpha3/route"
 	"istio.io/istio/pilot/pkg/networking/core/v1alpha3/route/retry"
 	"istio.io/istio/pilot/pkg/networking/plugin/authn"
 	"istio.io/istio/pilot/pkg/networking/util"
-	istiomatcher "istio.io/istio/pilot/pkg/security/authz/matcher"
 	security "istio.io/istio/pilot/pkg/security/model"
 	"istio.io/istio/pilot/pkg/util/protoconv"
 	xdsfilters "istio.io/istio/pilot/pkg/xds/filters"
@@ -47,21 +52,19 @@ import (
 	"istio.io/istio/pkg/config/labels"
 	"istio.io/istio/pkg/config/protocol"
 	"istio.io/istio/pkg/proto"
-	"istio.io/istio/pkg/util/sets"
 	"istio.io/pkg/log"
 )
 
 type WorkloadAndServices struct {
-	WorkloadInfo ambient.Workload
+	WorkloadInfo *model.WorkloadInfo
 	Services     []*model.Service
 }
 
 func FindAssociatedResources(node *model.Proxy, push *model.PushContext) ([]WorkloadAndServices, map[host.Name]*model.Service) {
 	wls := []WorkloadAndServices{}
-	for _, wl := range push.AmbientIndex.Workloads.ByIdentity[node.VerifiedIdentity.String()] {
-		if wl.Labels[ambient.LabelType] != ambient.TypeWorkload {
-			continue
-		}
+	scope := node.WaypointScope()
+	workloads := push.WorkloadsForWaypoint(scope)
+	for _, wl := range workloads {
 		wls = append(wls, WorkloadAndServices{WorkloadInfo: wl})
 	}
 	svcs := map[host.Name]*model.Service{}
@@ -87,129 +90,89 @@ func (lb *ListenerBuilder) serviceForHostname(name host.Name) *model.Service {
 
 func (lb *ListenerBuilder) buildWaypointInbound() []*listener.Listener {
 	listeners := []*listener.Listener{}
-	// We create 4 listeners:
-	// 1. Our top level terminating CONNECT listener, `inbound TERMINATE`. This has a route per destination and decapsulates the CONNECT,
-	//    forwarding to the VIP or Pod internal listener.
-	// 2. (many) VIP listeners, `inbound-vip||hostname|port`. This will apply service policies. For typical case (not redirecting to external service),
-	//    this will end up forwarding to a cluster for the same VIP, which will have endpoints for each Pod internal listener
-	// 3. (many) Pod listener, `inbound-pod||podip|port`. This is one per inbound pod. Will go through HCM if needed, in order to apply L7 policies (authz)
-	//    Note: we need both a pod listener and a VIP listener since we need to apply policies at different levels (routing vs authz).
-	// 4. Our final CONNECT listener, originating the tunnel
+	// We create 3 listeners:
+	// 1. Decapsulation CONNECT listener, `inbound TERMINATE`.
+	// 2. IP dispatch listener, handling both VIPs and direct pod IPs.
+	// 3. Encapsulation CONNECT listener, originating the tunnel
 	wls, svcs := FindAssociatedResources(lb.node, lb.push)
 
-	listeners = append(listeners, lb.buildWaypointInboundTerminateConnect(svcs, wls))
-
-	// VIP listeners
-	listeners = append(listeners, lb.buildWaypointInboundVIP(svcs)...)
-
-	// Pod listeners
-	listeners = append(listeners, lb.buildWaypointInboundPod(wls)...)
-
-	listeners = append(listeners, lb.buildWaypointInboundOriginateConnect())
+	listeners = append(listeners,
+		lb.buildWaypointInboundTerminateConnect(),
+		lb.buildWaypointInternal(wls, svcs),
+		lb.buildWaypointInboundOriginateConnect())
 
 	return listeners
 }
 
-// Our top level terminating CONNECT listener, `inbound TERMINATE`. This has a route per destination and decapsulates the CONNECT,
-// forwarding to the VIP or Pod internal listener.
-func (lb *ListenerBuilder) buildWaypointInboundTerminateConnect(svcs map[host.Name]*model.Service, wls []WorkloadAndServices) *listener.Listener {
-	actualWildcard, _ := getActualWildcardAndLocalHost(lb.node)
-	// CONNECT listener
+func (lb *ListenerBuilder) buildWaypointInboundTerminateConnect() *listener.Listener {
+	name := "connect_terminate"
 	vhost := &route.VirtualHost{
-		Name:    "connect",
+		Name:    "default",
 		Domains: []string{"*"},
-	}
-	for _, svc := range svcs {
-		for _, port := range svc.Ports {
-			if port.Protocol == protocol.UDP {
-				continue
-			}
-			clusterName := model.BuildSubsetKey(model.TrafficDirectionInboundVIP, "internal", svc.Hostname, port.Port)
-			vhost.Routes = append(vhost.Routes, &route.Route{
-				Match: &route.RouteMatch{
-					PathSpecifier: &route.RouteMatch_ConnectMatcher_{ConnectMatcher: &route.RouteMatch_ConnectMatcher{}},
-					Headers: []*route.HeaderMatcher{
-						istiomatcher.HeaderMatcher(":authority", fmt.Sprintf("%s:%d", svc.GetAddressForProxy(lb.node), port.Port)),
-					},
-				},
-				Action: &route.Route_Route{Route: &route.RouteAction{
-					UpgradeConfigs: []*route.RouteAction_UpgradeConfig{{
-						UpgradeType:   "CONNECT",
-						ConnectConfig: &route.RouteAction_UpgradeConfig_ConnectConfig{},
-					}},
-					ClusterSpecifier: &route.RouteAction_Cluster{Cluster: clusterName},
-				}},
-			})
-		}
-	}
-
-	// it's possible for us to hit this listener and target a Pod directly; route through the inbound-pod internal listener
-	// TODO: this shouldn't match on port; we should accept traffic to any port.
-	for _, wlx := range wls {
-		wl := wlx.WorkloadInfo
-		// TODO: fake proxy is really bad. Should have these take in Workload or similar
-		instances := lb.Discovery.GetProxyServiceInstances(&model.Proxy{
-			Type:            model.SidecarProxy,
-			IPAddresses:     []string{wl.PodIP},
-			ConfigNamespace: wl.Namespace,
-			Metadata: &model.NodeMetadata{
-				Namespace: wl.Namespace,
-				Labels:    wl.Labels,
+		Routes: []*route.Route{{
+			Match: &route.RouteMatch{
+				PathSpecifier: &route.RouteMatch_ConnectMatcher_{ConnectMatcher: &route.RouteMatch_ConnectMatcher{}},
 			},
-		})
-		// For each port, setup a route
-		for _, port := range getPorts(instances) {
-			clusterName := model.BuildSubsetKey(model.TrafficDirectionInboundPod, "internal", host.Name(wl.PodIP), port.Port)
-			vhost.Routes = append(vhost.Routes, &route.Route{
-				Match: &route.RouteMatch{
-					PathSpecifier: &route.RouteMatch_ConnectMatcher_{ConnectMatcher: &route.RouteMatch_ConnectMatcher{}},
-					Headers: []*route.HeaderMatcher{
-						istiomatcher.HeaderMatcher(":authority", fmt.Sprintf("%s:%d", wl.PodIP, port.Port)),
-					},
-				},
-				Action: &route.Route_Route{Route: &route.RouteAction{
-					UpgradeConfigs: []*route.RouteAction_UpgradeConfig{{
-						UpgradeType:   "CONNECT",
-						ConnectConfig: &route.RouteAction_UpgradeConfig_ConnectConfig{},
-					}},
-					ClusterSpecifier: &route.RouteAction_Cluster{Cluster: clusterName},
+			Action: &route.Route_Route{Route: &route.RouteAction{
+				UpgradeConfigs: []*route.RouteAction_UpgradeConfig{{
+					UpgradeType:   "CONNECT",
+					ConnectConfig: &route.RouteAction_UpgradeConfig_ConnectConfig{},
 				}},
-			})
-		}
+				ClusterSpecifier: &route.RouteAction_Cluster{Cluster: "internal"},
+			}},
+			TypedPerFilterConfig: map[string]*any.Any{
+				xdsfilters.ConnectAuthorityFilter.Name: xdsfilters.ConnectAuthorityEnabled,
+			},
+		}},
 	}
 
-	httpOpts := &httpListenerOpts{
-		routeConfig: &route.RouteConfiguration{
-			Name:             "local_route",
-			VirtualHosts:     []*route.VirtualHost{vhost},
-			ValidateClusters: proto.BoolFalse,
+	actualWildcard, _ := getActualWildcardAndLocalHost(lb.node)
+	h := &hcm.HttpConnectionManager{
+		StatPrefix: name,
+		RouteSpecifier: &hcm.HttpConnectionManager_RouteConfig{
+			RouteConfig: &route.RouteConfiguration{
+				Name:         "default",
+				VirtualHosts: []*route.VirtualHost{vhost},
+			},
 		},
-		statPrefix:           "inbound_hcm",
-		protocol:             protocol.HTTP2,
-		class:                istionetworking.ListenerClassSidecarInbound,
-		skipTelemetryFilters: true, // do not include telemetry filters on the CONNECT termination chain
-		skipRBACFilters:      true,
+		// Append and forward client cert to backend.
+		ForwardClientCertDetails: hcm.HttpConnectionManager_APPEND_FORWARD,
+		SetCurrentClientCertDetails: &hcm.HttpConnectionManager_SetCurrentClientCertDetails{
+			Subject: proto.BoolTrue,
+			Uri:     true,
+			Dns:     true,
+		},
+		ServerName:       EnvoyServerName,
+		UseRemoteAddress: proto.BoolFalse,
 	}
 
-	h := lb.buildHTTPConnectionManager(httpOpts)
-
+	// Protocol settings
+	notimeout := durationpb.New(0 * time.Second)
+	h.StreamIdleTimeout = notimeout
 	h.UpgradeConfigs = []*hcm.HttpConnectionManager_UpgradeConfig{{
 		UpgradeType: "CONNECT",
 	}}
 	h.Http2ProtocolOptions = &core.Http2ProtocolOptions{
 		AllowConnect: true,
 	}
-	name := "inbound_CONNECT_terminate"
+
+	// Filters needed to propagate the tunnel metadata to the inner streams.
+	h.HttpFilters = []*hcm.HttpFilter{
+		xdsfilters.ConnectBaggageFilter,
+		xdsfilters.ConnectAuthorityFilter,
+		xdsfilters.Router,
+	}
+
 	l := &listener.Listener{
 		Name:    name,
 		Address: util.BuildAddress(actualWildcard, model.HBoneInboundListenPort),
 		FilterChains: []*listener.FilterChain{
 			{
-				Name: name,
+				Name: "default",
 				TransportSocket: &core.TransportSocket{
-					Name: "envoy.transport_sockets.tls",
+					Name: "tls",
 					ConfigType: &core.TransportSocket_TypedConfig{TypedConfig: protoconv.MessageToAny(&tls.DownstreamTlsContext{
-						CommonTlsContext: buildCommonTLSContext(lb.node, nil, lb.push, true),
+						CommonTlsContext: buildCommonTLSContext(lb.node, lb.push),
 					})},
 				},
 				Filters: []*listener.Filter{
@@ -225,45 +188,20 @@ func (lb *ListenerBuilder) buildWaypointInboundTerminateConnect(svcs map[host.Na
 	return l
 }
 
-func (lb *ListenerBuilder) buildWaypointInboundOriginateConnect() *listener.Listener {
-	name := "inbound_CONNECT_originate"
-	l := &listener.Listener{
-		Name:              name,
-		UseOriginalDst:    wrappers.Bool(false),
-		ListenerSpecifier: &listener.Listener_InternalListener{InternalListener: &listener.Listener_InternalListenerConfig{}},
-		ListenerFilters:   []*listener.ListenerFilter{util.InternalListenerSetAddressFilter()},
-		FilterChains: []*listener.FilterChain{{
-			Filters: []*listener.Filter{{
-				Name: wellknown.TCPProxy,
-				ConfigType: &listener.Filter_TypedConfig{
-					TypedConfig: protoconv.MessageToAny(&tcp.TcpProxy{
-						StatPrefix:       name,
-						ClusterSpecifier: &tcp.TcpProxy_Cluster{Cluster: name},
-						TunnelingConfig: &tcp.TcpProxy_TunnelingConfig{
-							Hostname: "%DYNAMIC_METADATA(tunnel:destination)%",
-							HeadersToAdd: []*core.HeaderValueOption{
-								{Header: &core.HeaderValue{Key: "x-envoy-original-dst-host", Value: "%DYNAMIC_METADATA([\"tunnel\", \"destination\"])%"}},
-							},
-						},
-					}),
-				},
-			}},
-		}},
-	}
-	return l
-}
-
-// VIP listeners, `inbound||hostname|port`. This will apply service policies. For typical case (not redirecting to external service),
-// this will end up forwarding to a cluster for the same VIP, which will have endpoints for each Pod internal listener
-func (lb *ListenerBuilder) buildWaypointInboundVIP(svcs map[host.Name]*model.Service) []*listener.Listener {
-	listeners := []*listener.Listener{}
+func (lb *ListenerBuilder) buildWaypointInternal(wls []WorkloadAndServices, svcs map[host.Name]*model.Service) *listener.Listener {
+	ipMatcher := &matcher.IPMatcher{}
+	chains := []*listener.FilterChain{}
+	pre, post := lb.buildWaypointHTTPFilters()
 	for _, svc := range svcs {
+		portMapper := match.NewDestinationPort()
 		for _, port := range svc.Ports {
 			if port.Protocol == protocol.UDP {
 				continue
 			}
+			portString := fmt.Sprintf("%d", port.Port)
 			cc := inboundChainConfig{
 				clusterName: model.BuildSubsetKey(model.TrafficDirectionInboundVIP, "tcp", svc.Hostname, port.Port),
+				// clusterName: model.BuildSubsetKey(model.TrafficDirectionInboundPod, "", host.Name(wl.PodIP), port.Port),
 				port: ServiceInstancePort{
 					Name:       port.Name,
 					Port:       uint32(port.Port),
@@ -282,133 +220,160 @@ func (lb *ListenerBuilder) buildWaypointInboundVIP(svcs map[host.Name]*model.Ser
 			cc.clusterName = model.BuildSubsetKey(model.TrafficDirectionInboundVIP, "http", svc.Hostname, port.Port)
 			httpName := name + "-http"
 			httpChain := &listener.FilterChain{
-				Filters: lb.buildWaypointInboundVIPHTTPFilters(svc, cc),
+				Filters: lb.buildWaypointInboundHTTPFilters(svc, cc, pre, post),
 				Name:    httpName,
-			}
-			l := &listener.Listener{
-				Name:              name,
-				ListenerSpecifier: &listener.Listener_InternalListener{InternalListener: &listener.Listener_InternalListenerConfig{}},
-				TrafficDirection:  core.TrafficDirection_INBOUND,
-				FilterChains:      []*listener.FilterChain{},
-				ListenerFilters: []*listener.ListenerFilter{
-					util.InternalListenerSetAddressFilter(),
-				},
 			}
 			if port.Protocol.IsUnsupported() {
 				// If we need to sniff, insert two chains and the protocol detector
-				l.FilterChains = append(l.FilterChains, tcpChain, httpChain)
-				l.FilterChainMatcher = match.NewAppProtocol(match.ProtocolMatch{
+				chains = append(chains, tcpChain, httpChain)
+				portMapper.Map[portString] = match.ToMatcher(match.NewAppProtocol(match.ProtocolMatch{
 					TCP:  match.ToChain(tcpName),
 					HTTP: match.ToChain(httpName),
-				})
+				}))
 			} else if port.Protocol.IsHTTP() {
 				// Otherwise, just insert HTTP/TCP
-				l.FilterChains = append(l.FilterChains, httpChain)
+				chains = append(chains, httpChain)
+				portMapper.Map[portString] = match.ToChain(httpChain.Name)
 			} else {
-				l.FilterChains = append(l.FilterChains, tcpChain)
+				chains = append(chains, tcpChain)
+				portMapper.Map[portString] = match.ToChain(tcpChain.Name)
 			}
-			listeners = append(listeners, l)
+		}
+		if len(portMapper.Map) > 0 {
+			cidr := util.ConvertAddressToCidr(svc.GetAddressForProxy(lb.node))
+			rangeMatcher := &matcher.IPMatcher_IPRangeMatcher{
+				Ranges: []*xds.CidrRange{{
+					AddressPrefix: cidr.AddressPrefix,
+					PrefixLen:     cidr.PrefixLen,
+				}},
+				OnMatch: match.ToMatcher(portMapper.Matcher),
+			}
+			ipMatcher.RangeMatchers = append(ipMatcher.RangeMatchers, rangeMatcher)
 		}
 	}
-	return listeners
-}
 
-// (many) Pod listener, `inbound||podip|port`. This is one per inbound pod. Will go through HCM if needed, in order to apply L7 policies (authz)
-// Note: we need both a pod listener and a VIP listener since we need to apply policies at different levels (routing vs authz).
-func (lb *ListenerBuilder) buildWaypointInboundPod(wls []WorkloadAndServices) []*listener.Listener {
-	listeners := []*listener.Listener{}
-	for _, wlx := range wls {
-		// Follow same logic as today, but no mTLS ever
-		wl := wlx.WorkloadInfo
-
-		// For each port, setup a match
-		// TODO: fake proxy is really bad. Should have these take in Workload or similar
-		instances := lb.Discovery.GetProxyServiceInstances(&model.Proxy{
-			Type:            model.SidecarProxy,
-			IPAddresses:     []string{wl.PodIP},
-			ConfigNamespace: wl.Namespace,
-			Metadata: &model.NodeMetadata{
-				Namespace: wl.Namespace,
-				Labels:    wl.Labels,
+	{
+		// Direct pod access chain.
+		cc := inboundChainConfig{
+			clusterName: "encap",
+			port: ServiceInstancePort{
+				Name:     "unknown",
+				Protocol: protocol.TCP,
 			},
-		})
-		if len(instances) == 0 {
-			// TODO: Don't we need some passthrough mechanism? We will need ORIG_PORT but custom IP to implement that though
-			continue
+			bind:  "0.0.0.0",
+			hbone: true,
 		}
-		wlBuilder := lb.WithWorkload(wl)
-		for _, port := range getPorts(instances) {
-			if port.Protocol == protocol.UDP {
-				continue
-			}
-			cc := inboundChainConfig{
-				clusterName: model.BuildSubsetKey(model.TrafficDirectionInboundPod, "", host.Name(wl.PodIP), port.Port),
-				port: ServiceInstancePort{
-					Name:       port.Name,
-					Port:       uint32(port.Port),
-					TargetPort: uint32(port.Port),
-					Protocol:   port.Protocol,
+		tcpChain := &listener.FilterChain{
+			Filters: append([]*listener.Filter{
+				xdsfilters.ConnectAuthorityNetworkFilter,
+			},
+				lb.buildInboundNetworkFilters(cc)...),
+			Name: "direct-tcp",
+		}
+		// TODO: maintains undesirable persistent HTTP connections to "encap"
+		httpChain := &listener.FilterChain{
+			Filters: append([]*listener.Filter{
+				xdsfilters.ConnectAuthorityNetworkFilter,
+			},
+				lb.buildWaypointInboundHTTPFilters(nil, cc, pre, post)...),
+			Name: "direct-http",
+		}
+		// Workload IP filtering happens here.
+		ipRange := []*xds.CidrRange{}
+		for _, wlx := range wls {
+			addr, _ := netip.AddrFromSlice(wlx.WorkloadInfo.Address)
+			cidr := util.ConvertAddressToCidr(addr.String())
+			ipRange = append(ipRange, &xds.CidrRange{
+				AddressPrefix: cidr.AddressPrefix,
+				PrefixLen:     cidr.PrefixLen,
+			})
+		}
+		chains = append(chains, tcpChain, httpChain)
+		ipMatcher.RangeMatchers = append(ipMatcher.RangeMatchers,
+			&matcher.IPMatcher_IPRangeMatcher{
+				Ranges: ipRange,
+				OnMatch: match.ToMatcher(match.NewAppProtocol(match.ProtocolMatch{
+					TCP:  match.ToChain(tcpChain.Name),
+					HTTP: match.ToChain(httpChain.Name),
+				})),
+			})
+	}
+	l := &listener.Listener{
+		Name:              "internal",
+		ListenerSpecifier: &listener.Listener_InternalListener{InternalListener: &listener.Listener_InternalListenerConfig{}},
+		ListenerFilters: []*listener.ListenerFilter{
+			util.InternalListenerSetAddressFilter(),
+			// TODO: This may affect the data path due to the server-first protocols triggering a time-out. Need exception filter.
+			xdsfilters.HTTPInspector,
+		},
+		TrafficDirection: core.TrafficDirection_INBOUND,
+		FilterChains:     chains,
+		FilterChainMatcher: &matcher.Matcher{
+			MatcherType: &matcher.Matcher_MatcherTree_{
+				MatcherTree: &matcher.Matcher_MatcherTree{
+					Input: match.DestinationIP,
+					TreeType: &matcher.Matcher_MatcherTree_CustomMatch{
+						CustomMatch: &xds.TypedExtensionConfig{
+							Name:        "ip",
+							TypedConfig: protoconv.MessageToAny(ipMatcher),
+						},
+					},
 				},
-				bind:  "0.0.0.0",
-				hbone: true,
-			}
-			name := cc.clusterName
-
-			tcpName := name + "-tcp"
-			tcpChain := &listener.FilterChain{
-				Filters: wlBuilder.buildInboundNetworkFilters(cc),
-				Name:    tcpName,
-			}
-
-			httpName := name + "-http"
-			httpChain := &listener.FilterChain{
-				Filters: wlBuilder.buildInboundNetworkFiltersForHTTP(cc),
-				Name:    httpName,
-			}
-			l := &listener.Listener{
-				Name:              name,
-				ListenerSpecifier: &listener.Listener_InternalListener{InternalListener: &listener.Listener_InternalListenerConfig{}},
-				ListenerFilters:   []*listener.ListenerFilter{util.InternalListenerSetAddressFilter()},
-				TrafficDirection:  core.TrafficDirection_INBOUND,
-				FilterChains:      []*listener.FilterChain{},
-			}
-			if port.Protocol.IsUnsupported() {
-				// If we need to sniff, insert two chains and the protocol detector
-				l.FilterChains = append(l.FilterChains, tcpChain, httpChain)
-				l.FilterChainMatcher = match.NewAppProtocol(match.ProtocolMatch{
-					TCP:  match.ToChain(tcpName),
-					HTTP: match.ToChain(httpName),
-				})
-			} else if port.Protocol.IsHTTP() {
-				// Otherwise, just insert HTTP/TCP
-				l.FilterChains = append(l.FilterChains, httpChain)
-			} else {
-				l.FilterChains = append(l.FilterChains, tcpChain)
-			}
-			listeners = append(listeners, l)
-		}
+			},
+		},
 	}
-	return listeners
+	return l
 }
 
-func getPorts(services []*model.ServiceInstance) []model.Port {
-	p := map[int]model.Port{}
-	for _, s := range services {
-		p[int(s.Endpoint.EndpointPort)] = model.Port{
-			Port:     int(s.Endpoint.EndpointPort),
-			Protocol: s.ServicePort.Protocol,
-		}
+func (lb *ListenerBuilder) buildWaypointInboundOriginateConnect() *listener.Listener {
+	name := "connect_originate"
+	l := &listener.Listener{
+		Name:              name,
+		UseOriginalDst:    wrappers.Bool(false),
+		ListenerSpecifier: &listener.Listener_InternalListener{InternalListener: &listener.Listener_InternalListenerConfig{}},
+		ListenerFilters:   []*listener.ListenerFilter{util.InternalListenerSetAddressFilter()},
+		FilterChains: []*listener.FilterChain{{
+			Filters: []*listener.Filter{{
+				Name: wellknown.TCPProxy,
+				ConfigType: &listener.Filter_TypedConfig{
+					TypedConfig: protoconv.MessageToAny(&tcp.TcpProxy{
+						StatPrefix:       name,
+						ClusterSpecifier: &tcp.TcpProxy_Cluster{Cluster: name},
+						TunnelingConfig: &tcp.TcpProxy_TunnelingConfig{
+							Hostname: "%DOWNSTREAM_LOCAL_ADDRESS%",
+						},
+					}),
+				},
+			}},
+		}},
 	}
-	pl := []model.Port{}
-	for _, m := range p {
-		pl = append(pl, m)
-	}
-	return pl
+	return l
 }
 
-// buildWaypointInboundVIPHTTPFilters builds the network filters that should be inserted before an HCM.
+// buildWaypointHTTPFilters augments the common chain of Waypoint-bound HTTP filters.
+// Authn/authz filters are pre-pended. Telemetry filters are appended.
+func (lb *ListenerBuilder) buildWaypointHTTPFilters() (pre []*hcm.HttpFilter, post []*hcm.HttpFilter) {
+	// TODO: consider dedicated listener class for waypoint filters
+	cls := istionetworking.ListenerClassSidecarInbound
+	wasm := lb.push.WasmPluginsByListenerInfo(lb.node, model.WasmPluginListenerInfo{
+		Class: cls,
+	})
+	// TODO: how to deal with ext-authz? It will be in the ordering twice
+	pre = append(pre, lb.authzCustomBuilder.BuildHTTP(cls)...)
+	pre = extension.PopAppend(pre, wasm, extensions.PluginPhase_AUTHN)
+	pre = append(pre, lb.authnBuilder.BuildHTTP(cls)...)
+	pre = extension.PopAppend(pre, wasm, extensions.PluginPhase_AUTHZ)
+	pre = append(pre, lb.authzBuilder.BuildHTTP(cls)...)
+	// TODO: these feel like the wrong place to insert, but this retains backwards compatibility with the original implementation
+	post = extension.PopAppend(post, wasm, extensions.PluginPhase_STATS)
+	post = extension.PopAppend(post, wasm, extensions.PluginPhase_UNSPECIFIED_PHASE)
+	post = append(post, lb.push.Telemetry.HTTPFilters(lb.node, cls)...)
+	return
+}
+
+// buildWaypointInboundHTTPFilters builds the network filters that should be inserted before an HCM.
 // This should only be used with HTTP; see buildInboundNetworkFilters for TCP
-func (lb *ListenerBuilder) buildWaypointInboundVIPHTTPFilters(svc *model.Service, cc inboundChainConfig) []*listener.Filter {
+func (lb *ListenerBuilder) buildWaypointInboundHTTPFilters(svc *model.Service, cc inboundChainConfig, pre, post []*hcm.HttpFilter) []*listener.Filter {
 	var filters []*listener.Filter
 	if !lb.node.IsAmbient() {
 		filters = append(filters, buildMetadataExchangeNetworkFilters(istionetworking.ListenerClassSidecarInbound)...)
@@ -428,10 +393,10 @@ func (lb *ListenerBuilder) buildWaypointInboundVIPHTTPFilters(svc *model.Service
 			},
 			ServerName: EnvoyServerName,
 		},
-		protocol:        cc.port.Protocol,
-		class:           istionetworking.ListenerClassSidecarInbound,
-		statPrefix:      cc.StatPrefix(),
-		skipRBACFilters: true, // Handled by pod listener
+		protocol:   cc.port.Protocol,
+		class:      istionetworking.ListenerClassSidecarInbound,
+		statPrefix: cc.StatPrefix(),
+		isWaypoint: true,
 	}
 	// See https://github.com/grpc/grpc-web/tree/master/net/grpc/gateway/examples/helloworld#configure-the-proxy
 	if cc.port.Protocol.IsHTTP2() {
@@ -445,6 +410,12 @@ func (lb *ListenerBuilder) buildWaypointInboundVIPHTTPFilters(svc *model.Service
 	}
 	h := lb.buildHTTPConnectionManager(httpOpts)
 
+	// Last filter must be router.
+	router := h.HttpFilters[len(h.HttpFilters)-1]
+	h.HttpFilters = append(pre, h.HttpFilters[:len(h.HttpFilters)-1]...)
+	h.HttpFilters = append(h.HttpFilters, post...)
+	h.HttpFilters = append(h.HttpFilters, router)
+
 	filters = append(filters, &listener.Filter{
 		Name:       wellknown.HTTPConnectionManager,
 		ConfigType: &listener.Filter_TypedConfig{TypedConfig: protoconv.MessageToAny(h)},
@@ -453,6 +424,10 @@ func (lb *ListenerBuilder) buildWaypointInboundVIPHTTPFilters(svc *model.Service
 }
 
 func buildWaypointInboundHTTPRouteConfig(lb *ListenerBuilder, svc *model.Service, cc inboundChainConfig) *route.RouteConfiguration {
+	// TODO: Policy binding via VIP+Host is inapplicable for direct pod access.
+	if svc == nil {
+		return buildSidecarInboundHTTPRouteConfig(lb, cc)
+	}
 	vss := getConfigsForHost(svc.Hostname, lb.node.SidecarScope.EgressListeners[0].VirtualServices())
 	if len(vss) == 0 {
 		return buildSidecarInboundHTTPRouteConfig(lb, cc)
@@ -557,7 +532,7 @@ func (lb *ListenerBuilder) translateRoute(
 	}
 
 	if in.Redirect != nil {
-		istio_route.ApplyRedirect(out, in.Redirect, listenPort)
+		istio_route.ApplyRedirect(out, in.Redirect, listenPort, model.UseGatewaySemantics(virtualService))
 	} else {
 		lb.routeDestination(out, in, authority, listenPort)
 	}
@@ -697,10 +672,13 @@ func (lb *ListenerBuilder) GetDestinationCluster(destination *networking.Destina
 		// If blackhole cluster is needed, do the check on the caller side. See gateway and tls.go for examples.
 	}
 
-	// this waypoint proxy isn't responsible for this service so we use outbound; TODO quicker svc account check
-	if service != nil && lb.node.VerifiedIdentity != nil && (service.MeshExternal ||
-		!sets.New(lb.push.ServiceAccounts(service.Hostname, service.Attributes.Namespace, port)...).Contains(lb.node.VerifiedIdentity.String())) {
-		dir, subset = model.TrafficDirectionOutbound, destination.Subset
+	if service != nil {
+		_, svcs := FindAssociatedResources(lb.node, lb.push)
+		_, f := svcs[service.Hostname]
+		if !f || service.MeshExternal {
+			// this waypoint proxy isn't responsible for this service so we use outbound; TODO quicker lookup
+			dir, subset = model.TrafficDirectionOutbound, destination.Subset
+		}
 	}
 
 	return model.BuildSubsetKey(
@@ -712,23 +690,10 @@ func (lb *ListenerBuilder) GetDestinationCluster(destination *networking.Destina
 }
 
 // TODO remove dupe with ztunnelgen
-func buildCommonTLSContext(proxy *model.Proxy, workload *ambient.Workload, push *model.PushContext, inbound bool) *tls.CommonTlsContext {
+func buildCommonTLSContext(proxy *model.Proxy, push *model.PushContext) *tls.CommonTlsContext {
 	ctx := &tls.CommonTlsContext{}
-	security.ApplyToCommonTLSContext(ctx, proxy, nil, authn.TrustDomainsForValidation(push.Mesh), inbound)
-
-	// TODO always use the below flow, always specify which workload
-	if workload != nil {
-		// present the workload cert if possible
-		workloadSecret := workload.Identity()
-		if workload.UID != "" {
-			workloadSecret += "~" + workload.Name + "~" + workload.UID
-		}
-		ctx.TlsCertificateSdsSecretConfigs = []*tls.SdsSecretConfig{
-			security.ConstructSdsSecretConfig(workloadSecret),
-		}
-	}
+	security.ApplyToCommonTLSContext(ctx, proxy, nil, authn.TrustDomainsForValidation(push.Mesh), true)
 	ctx.AlpnProtocols = []string{"h2"}
-
 	ctx.TlsParams = &tls.TlsParameters{
 		// Ensure TLS 1.3 is used everywhere
 		TlsMaximumProtocolVersion: tls.TlsParameters_TLSv1_3,
@@ -748,10 +713,7 @@ func outboundTunnelListener(push *model.PushContext, proxy *model.Proxy) *listen
 		// AccessLog:        accessLogString("outbound tunnel"),
 		ClusterSpecifier: &tcp.TcpProxy_Cluster{Cluster: name},
 		TunnelingConfig: &tcp.TcpProxy_TunnelingConfig{
-			Hostname: "%DYNAMIC_METADATA(tunnel:destination)%",
-			HeadersToAdd: []*core.HeaderValueOption{
-				{Header: &core.HeaderValue{Key: "x-envoy-original-dst-host", Value: "%DYNAMIC_METADATA([\"tunnel\", \"destination\"])%"}},
-			},
+			Hostname: "%DOWNSTREAM_LOCAL_ADDRESS%",
 		},
 	}
 

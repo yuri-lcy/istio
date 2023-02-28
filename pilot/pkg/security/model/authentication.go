@@ -56,11 +56,6 @@ const (
 	// EnvoyJwtFilterName is the name of the Envoy JWT filter. This should be the same as the name defined
 	// in https://github.com/envoyproxy/envoy/blob/v1.9.1/source/extensions/filters/http/well_known_names.h#L48
 	EnvoyJwtFilterName = "envoy.filters.http.jwt_authn"
-
-	// AuthnFilterName is the name for the Istio AuthN filter. This should be the same
-	// as the name defined in
-	// https://github.com/istio/proxy/blob/master/src/envoy/http/authn/http_filter_factory.cc#L30
-	AuthnFilterName = "istio_authn"
 )
 
 var SDSAdsConfig = &core.ConfigSource{
@@ -99,7 +94,7 @@ func ConstructSdsSecretConfigForCredential(name string, credentialSocketExist bo
 	}
 }
 
-// ConstructSdsSecretConfigForSDSEndpoint constructs SDS Secret Configuration based on CredentialNameSocketPath
+// ConstructSdsSecretConfigForCredentialSocket constructs SDS Secret Configuration based on CredentialNameSocketPath
 // if CredentialNameSocketPath exists, use a static cluster 'sds-external'
 func ConstructSdsSecretConfigForCredentialSocket(name string) *tls.SdsSecretConfig {
 	return &tls.SdsSecretConfig{
@@ -207,7 +202,8 @@ func ConstructSdsSecretConfig(name string) *tls.SdsSecretConfig {
 	return cfg
 }
 
-func appendURIPrefixToTrustDomain(trustDomainAliases []string) []string {
+// AppendURIPrefixToTrustDomain append SPIFFE prefix to URI.
+func AppendURIPrefixToTrustDomain(trustDomainAliases []string) []string {
 	var res []string
 	for _, td := range trustDomainAliases {
 		res = append(res, spiffe.URIPrefix+td+"/")
@@ -232,7 +228,7 @@ func ApplyToCommonTLSContext(tlsContext *tls.CommonTlsContext, proxy *model.Prox
 	// TODO: if user explicitly specifies SANs - should we alter his explicit config by adding all spifee aliases?
 	matchSAN := util.StringToExactMatch(subjectAltNames)
 	if len(trustDomainAliases) > 0 {
-		matchSAN = append(matchSAN, util.StringToPrefixMatch(appendURIPrefixToTrustDomain(trustDomainAliases))...)
+		matchSAN = append(matchSAN, util.StringToPrefixMatch(AppendURIPrefixToTrustDomain(trustDomainAliases))...)
 	}
 
 	// configure server listeners with SDS.

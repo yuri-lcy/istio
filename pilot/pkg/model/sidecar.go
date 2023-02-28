@@ -50,6 +50,7 @@ var (
 		kind.EnvoyFilter:           {},
 		kind.AuthorizationPolicy:   {},
 		kind.RequestAuthentication: {},
+		kind.WasmPlugin:            {},
 	}
 )
 
@@ -237,11 +238,9 @@ func DefaultSidecarScopeForNamespace(ps *PushContext, configNamespace string) *S
 			out.AddConfigDependencies(delegate)
 		}
 		for _, vs := range el.virtualServices {
-			out.AddConfigDependencies(ConfigKey{
-				Kind:      kind.VirtualService,
-				Name:      vs.Name,
-				Namespace: vs.Namespace,
-			}.HashCode())
+			for _, cfg := range VirtualServiceDependencies(vs) {
+				out.AddConfigDependencies(cfg.HashCode())
+			}
 		}
 	}
 
@@ -348,13 +347,11 @@ func ConvertToSidecarScope(ps *PushContext, sidecarConfig *config.Config, config
 		// That way, if there is ambiguity around what hostname to pick, a user can specify the one they
 		// want in the hosts field, and the potentially random choice below won't matter
 		for _, vs := range listener.virtualServices {
-			v := vs.Spec.(*networking.VirtualService)
-			out.AddConfigDependencies(ConfigKey{
-				Kind:      kind.VirtualService,
-				Name:      vs.Name,
-				Namespace: vs.Namespace,
-			}.HashCode())
+			for _, cfg := range VirtualServiceDependencies(vs) {
+				out.AddConfigDependencies(cfg.HashCode())
+			}
 
+			v := vs.Spec.(*networking.VirtualService)
 			for h, ports := range virtualServiceDestinations(v) {
 				// Default to this hostname in our config namespace
 				if s, ok := ps.ServiceIndex.HostnameAndNamespace[host.Name(h)][configNamespace]; ok {
@@ -529,7 +526,7 @@ func (ilw *IstioEgressListenerWrapper) VirtualServices() []config.Config {
 }
 
 // DependsOnConfig determines if the proxy depends on the given config.
-// Returns whether depends on this config or this kind of config is not scoped(unknown to be depended) here.
+// Returns whether depends on this config or this kind of config is not scopeZd(unknown to be depended) here.
 func (sc *SidecarScope) DependsOnConfig(config ConfigKey) bool {
 	if sc == nil {
 		return true
@@ -547,6 +544,13 @@ func (sc *SidecarScope) DependsOnConfig(config ConfigKey) bool {
 
 	_, exists := sc.configDependencies[config.HashCode()]
 	return exists
+}
+
+func (sc *SidecarScope) GetService(hostname host.Name) *Service {
+	if sc == nil {
+		return nil
+	}
+	return sc.servicesByHostname[hostname]
 }
 
 // AddConfigDependencies add extra config dependencies to this scope. This action should be done before the
@@ -595,11 +599,6 @@ func (sc *SidecarScope) DestinationRule(direction TrafficDirection, proxy *Proxy
 // Services returns the list of services that are visible to a sidecar.
 func (sc *SidecarScope) Services() []*Service {
 	return sc.services
-}
-
-// TODO delete me
-func (sc *SidecarScope) ServicesByHostname() map[host.Name]*Service {
-	return sc.servicesByHostname
 }
 
 // Return filtered services through the hosts field in the egress portion of the Sidecar config.

@@ -115,6 +115,9 @@ type Config struct {
 	// for the deployment.
 	ServiceAccount bool
 
+	// DisableAutomountSAToken indicates to opt out of auto mounting ServiceAccount's API credentials
+	DisableAutomountSAToken bool
+
 	// Ports for this application. Port numbers may or may not be used, depending
 	// on the implementation.
 	Ports Ports
@@ -169,6 +172,7 @@ type Config struct {
 	// IPFamilyPolicy. This is optional field. Mainly is used for dual stack testing.
 	IPFamilyPolicy string
 
+	// WaypointProxy specifies if this workload should have an associated Waypoint
 	WaypointProxy bool
 }
 
@@ -323,7 +327,7 @@ func (c Config) HasSidecar() bool {
 }
 
 func (c Config) IsUncaptured() bool {
-	return len(c.Subsets) == 0 || c.Subsets[0].Labels == nil || c.Subsets[0].Labels["ambient-type"] == "none"
+	return len(c.Subsets) > 0 && c.Subsets[0].Annotations != nil && c.Subsets[0].Annotations.Get(AmbientType) == constants.AmbientRedirectionDisabled
 }
 
 func (c Config) HasProxyCapabilities() bool {

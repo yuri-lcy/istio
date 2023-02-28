@@ -49,8 +49,18 @@ func NewBuilderSkipIdentity(actionType ActionType, push *model.PushContext, prox
 	option := builder.Option{
 		IsCustomBuilder: actionType == Custom,
 		SkippedIdentity: skipped,
-		IsAmbient:       proxy.IsAmbient(),
 	}
+	policies := push.AuthzPolicies.ListAuthorizationPolicies(proxy.ConfigNamespace, proxy.Labels)
+	if !util.IsIstioVersionGE117(proxy.IstioVersion) {
+		option.UseAuthenticated = true
+	}
+	b := builder.New(tdBundle, push, policies, option)
+	return &Builder{builder: b}
+}
+
+// NewBuilderWithOptions allows a builder with custom defined options
+func NewBuilderWithOptions(actionType ActionType, push *model.PushContext, proxy *model.Proxy, option builder.Option) *Builder {
+	tdBundle := trustdomain.NewBundle(push.Mesh.TrustDomain, push.Mesh.TrustDomainAliases)
 	policies := push.AuthzPolicies.ListAuthorizationPolicies(proxy.ConfigNamespace, proxy.Labels)
 	if !util.IsIstioVersionGE117(proxy.IstioVersion) {
 		option.UseAuthenticated = true

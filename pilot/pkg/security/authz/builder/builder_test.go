@@ -130,8 +130,9 @@ func TestGenerator_GenerateHTTP(t *testing.T) {
 		tdBundle   trustdomain.Bundle
 		meshConfig *meshconfig.MeshConfig
 		version    *model.IstioVersion
-		ambient    bool
 		input      string
+		ambient    bool
+		listener   string
 		want       []string
 	}{
 		{
@@ -145,10 +146,11 @@ func TestGenerator_GenerateHTTP(t *testing.T) {
 			want:  []string{"allow-full-rule-out.yaml"},
 		},
 		{
-			name:    "allow-full-rule-ambient",
-			input:   "allow-full-rule-in.yaml",
-			ambient: true,
-			want:    []string{"allow-full-rule-ambient-out.yaml"},
+			name:     "allow-full-rule-ambient",
+			input:    "allow-full-rule-ambient-in.yaml",
+			ambient:  true,
+			listener: "listener-pod|80||1.2.3.4",
+			want:     []string{"allow-full-rule-ambient-out.yaml"},
 		},
 		{
 			name:  "allow-nil-rule",
@@ -226,21 +228,16 @@ func TestGenerator_GenerateHTTP(t *testing.T) {
 			want:  []string{"multiple-policies-out.yaml"},
 		},
 		{
-			name:    "multiple-policies-ambient",
-			input:   "multiple-policies-in.yaml",
-			want:    []string{"multiple-policies-ambient-out.yaml"},
-			ambient: true,
+			name:     "multiple-policies-ambient",
+			input:    "multiple-policies-in.yaml",
+			ambient:  true,
+			listener: "listener-pod|80||1.2.3.4",
+			want:     []string{"multiple-policies-ambient-out.yaml"},
 		},
 		{
 			name:  "single-policy",
 			input: "single-policy-in.yaml",
 			want:  []string{"single-policy-out.yaml"},
-		},
-		{
-			name:    "single-policy-ambient",
-			input:   "single-policy-in.yaml",
-			want:    []string{"single-policy-ambient-out.yaml"},
-			ambient: true,
 		},
 		{
 			name:     "trust-domain-one-alias",

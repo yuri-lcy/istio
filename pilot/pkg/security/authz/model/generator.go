@@ -22,7 +22,7 @@ import (
 
 	"istio.io/istio/pilot/pkg/networking/util"
 	"istio.io/istio/pilot/pkg/security/authz/matcher"
-	sm "istio.io/istio/pilot/pkg/security/model"
+	"istio.io/istio/pilot/pkg/xds/filters"
 	"istio.io/istio/pkg/spiffe"
 )
 
@@ -156,7 +156,7 @@ func (requestPrincipalGenerator) principal(key, value string, forTCP bool, _ boo
 		return nil, fmt.Errorf("%q is HTTP only", key)
 	}
 
-	m := matcher.MetadataStringMatcher(sm.AuthnFilterName, key, matcher.StringMatcher(value))
+	m := matcher.MetadataStringMatcher(filters.AuthnFilterName, key, matcher.StringMatcher(value))
 	return principalMetadata(m), nil
 }
 
@@ -182,17 +182,8 @@ func (requestPresenterGenerator) principal(key, value string, forTCP bool, useAu
 
 type requestHeaderGenerator struct{}
 
-func (requestHeaderGenerator) permission(key, value string, forTCP bool) (*rbacpb.Permission, error) {
-	if forTCP {
-		return nil, fmt.Errorf("%q is HTTP only", key)
-	}
-
-	header, err := extractNameInBrackets(strings.TrimPrefix(key, attrRequestHeader))
-	if err != nil {
-		return nil, err
-	}
-	m := matcher.HeaderMatcher(header, value)
-	return permissionHeader(m), nil
+func (requestHeaderGenerator) permission(_, _ string, _ bool) (*rbacpb.Permission, error) {
+	return nil, fmt.Errorf("unimplemented")
 }
 
 func (requestHeaderGenerator) principal(key, value string, forTCP bool, _ bool) (*rbacpb.Principal, error) {
@@ -270,5 +261,15 @@ func (methodGenerator) permission(key, value string, forTCP bool) (*rbacpb.Permi
 }
 
 func (methodGenerator) principal(key, value string, forTCP bool, _ bool) (*rbacpb.Principal, error) {
+	return nil, fmt.Errorf("unimplemented")
+}
+
+type anyGenerator struct{}
+
+func (anyGenerator) permission(_, _ string, _ bool) (*rbacpb.Permission, error) {
+	return permissionAny(), nil
+}
+
+func (anyGenerator) principal(key, value string, forTCP bool, _ bool) (*rbacpb.Principal, error) {
 	return nil, fmt.Errorf("unimplemented")
 }

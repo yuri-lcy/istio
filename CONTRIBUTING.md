@@ -61,21 +61,11 @@ If you [disabled FIPs](https://github.com/istio/ztunnel/#building-on-non-linuxx8
 
 ## Setup Ambient
 
-```shell
-# Mesh config options are optional to improve debugging
-CGO_ENABLED=0 go run istioctl/cmd/istioctl/main.go install -d manifests/ --set hub=$HUB --set tag=$TAG -y \
-  --set profile=ambient --set meshConfig.accessLogFile=/dev/stdout --set meshConfig.defaultHttpRetryPolicy.attempts=0 \
-  --set values.global.imagePullPolicy=Always
-
-kubectl apply -f local-test-utils/samples/
-```
-
-with Rust [zTunnel](https://github.com/istio/ztunnel):
+Follow [the instruction](https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api/#setup) to install gateway CRD (required if you plan to deploy waypoint proxies).
 
 ```shell
 # Mesh config options are optional to improve debugging
 CGO_ENABLED=0 go run istioctl/cmd/istioctl/main.go install -d manifests/ --set hub=$HUB --set tag=$TAG -y \
-  --set values.ztunnel.image=ztunnel \
   --set profile=ambient --set meshConfig.accessLogFile=/dev/stdout --set meshConfig.defaultHttpRetryPolicy.attempts=0 \
   --set values.global.imagePullPolicy=Always
 
@@ -95,6 +85,12 @@ k exec -it $(k get po -lapp=sleep -ojsonpath='{.items[0].metadata.name}') -- sh
 
 # (From the client pod) Send traffic
 curl helloworld:5000/hello
+```
+
+## Deploy a waypoint proxy
+
+```shell
+go run istioctl/cmd/istioctl/main.go x waypoint apply --service-account helloworld --namespace default
 ```
 
 ## Tests with Sidecar Continue to Work
@@ -189,4 +185,3 @@ newer versions appear to be slightly broken (same node works, cross node request
 ```shell
 v1.22.6-eks-7d68063
 ```
-

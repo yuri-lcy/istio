@@ -15,9 +15,8 @@
 package xds
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"net"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,7 +27,6 @@ import (
 	wrappers "google.golang.org/protobuf/types/known/wrapperspb"
 
 	networkingapi "istio.io/api/networking/v1alpha3"
-	"istio.io/istio/pilot/pkg/ambient"
 	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/networking/core/v1alpha3/loadbalancer"
@@ -36,10 +34,13 @@ import (
 	"istio.io/istio/pilot/pkg/security/authn/factory"
 	"istio.io/istio/pkg/cluster"
 	"istio.io/istio/pkg/config"
+	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/host"
 	"istio.io/istio/pkg/config/labels"
 	"istio.io/istio/pkg/config/schema/kind"
 	"istio.io/istio/pkg/network"
+	"istio.io/istio/pkg/spiffe"
+	"istio.io/istio/pkg/util/hash"
 )
 
 var (
@@ -121,54 +122,57 @@ func (b EndpointBuilder) DestinationRule() *networkingapi.DestinationRule {
 func (b EndpointBuilder) Key() string {
 	// nolint: gosec
 	// Not security sensitive code
-	hash := md5.New()
-	hash.Write([]byte(b.clusterName))
-	hash.Write(Separator)
-	hash.Write([]byte(b.network))
-	hash.Write(Separator)
-	hash.Write([]byte(b.clusterID))
-	hash.Write(Separator)
-	hash.Write([]byte(b.nodeType))
-	hash.Write(Separator)
-	hash.Write([]byte(strconv.FormatBool(b.clusterLocal)))
-	hash.Write(Separator)
+	h := hash.New()
+	h.Write([]byte(b.clusterName))
+	h.Write(Separator)
+	h.Write([]byte(b.network))
+	h.Write(Separator)
+	h.Write([]byte(b.clusterID))
+	h.Write(Separator)
+	h.Write([]byte(b.nodeType))
+	h.Write(Separator)
+	h.Write([]byte(strconv.FormatBool(b.clusterLocal)))
+	h.Write(Separator)
 	if features.EnableHBONE && b.proxy != nil {
-		hash.Write([]byte(strconv.FormatBool(b.proxy.IsProxylessGrpc())))
-		hash.Write(Separator)
+		h.Write([]byte(strconv.FormatBool(b.proxy.IsProxylessGrpc())))
+		h.Write(Separator)
 	}
-	hash.Write([]byte(util.LocalityToString(b.locality)))
-	hash.Write(Separator)
+	h.Write([]byte(util.LocalityToString(b.locality)))
+	h.Write(Separator)
 	if len(b.failoverPriorityLabels) > 0 {
-		hash.Write(b.failoverPriorityLabels)
-		hash.Write(Separator)
+		h.Write(b.failoverPriorityLabels)
+		h.Write(Separator)
+	}
+	if b.service.Attributes.NodeLocal {
+		h.Write([]byte(b.proxy.GetNodeName()))
+		h.Write(Separator)
 	}
 
 	if b.push != nil && b.push.AuthnPolicies != nil {
-		hash.Write([]byte(b.push.AuthnPolicies.GetVersion()))
+		h.Write([]byte(b.push.AuthnPolicies.GetVersion()))
 	}
-	hash.Write(Separator)
+	h.Write(Separator)
 
 	for _, dr := range b.destinationRule.GetFrom() {
-		hash.Write([]byte(dr.Name))
-		hash.Write(Slash)
-		hash.Write([]byte(dr.Namespace))
+		h.Write([]byte(dr.Name))
+		h.Write(Slash)
+		h.Write([]byte(dr.Namespace))
 	}
-	hash.Write(Separator)
+	h.Write(Separator)
 
 	if b.service != nil {
-		hash.Write([]byte(b.service.Hostname))
-		hash.Write(Slash)
-		hash.Write([]byte(b.service.Attributes.Namespace))
+		h.Write([]byte(b.service.Hostname))
+		h.Write(Slash)
+		h.Write([]byte(b.service.Attributes.Namespace))
 	}
-	hash.Write(Separator)
+	h.Write(Separator)
 
 	if b.proxyView != nil {
-		hash.Write([]byte(b.proxyView.String()))
+		h.Write([]byte(b.proxyView.String()))
 	}
-	hash.Write(Separator)
+	h.Write(Separator)
 
-	sum := hash.Sum(nil)
-	return hex.EncodeToString(sum)
+	return h.Sum()
 }
 
 func (b EndpointBuilder) Cacheable() bool {
@@ -263,13 +267,19 @@ func (b *EndpointBuilder) buildLocalityLbEndpointsFromShards(
 	keys := shards.Keys()
 	// The shards are updated independently, now need to filter and merge for this cluster
 	for _, shardKey := range keys {
-		endpoints := shards.Shards[shardKey]
-		// If the downstream service is configured as cluster-local, only include endpoints that
-		// reside in the same cluster.
-		if isClusterLocal && (shardKey.Cluster != b.clusterID) {
-			continue
+		if shardKey.Cluster != b.clusterID {
+			// If the downstream service is configured as cluster-local, only include endpoints that
+			// reside in the same cluster.
+			if isClusterLocal || b.service.Attributes.NodeLocal {
+				continue
+			}
 		}
+		endpoints := shards.Shards[shardKey]
 		for _, ep := range endpoints {
+			// for ServiceInternalTrafficPolicy
+			if b.service.Attributes.NodeLocal && ep.NodeName != b.proxy.GetNodeName() {
+				continue
+			}
 			// TODO(nmittler): Consider merging discoverability policy with cluster-local
 			if !ep.IsDiscoverableFromProxy(b.proxy) {
 				continue
@@ -304,7 +314,11 @@ func (b *EndpointBuilder) buildLocalityLbEndpointsFromShards(
 			// Currently the HBONE implementation leads to different endpoint generation depending on if the
 			// client proxy supports HBONE or not. This breaks the cache.
 			// For now, just disable caching
-			ep.EnvoyEndpoint = buildEnvoyLbEndpoint(b, ep)
+			eep := buildEnvoyLbEndpoint(b, ep)
+			if eep == nil {
+				continue
+			}
+			ep.EnvoyEndpoint = eep
 			// detect if mTLS is possible for this endpoint, used later during ep filtering
 			// this must be done while converting IstioEndpoints because we still have workload labels
 			if b.mtlsChecker != nil {
@@ -367,11 +381,6 @@ func (b *EndpointBuilder) createClusterLoadAssignment(llbOpts []*LocalityEndpoin
 func buildEnvoyLbEndpoint(b *EndpointBuilder, e *model.IstioEndpoint) *endpoint.LbEndpoint {
 	dir, _, _, _ := model.ParseSubsetKey(b.clusterName)
 	addr := util.BuildAddress(e.Address, e.EndpointPort)
-	if dir == model.TrafficDirectionInboundVIP {
-		// For inbound, we only use EDS for the VIP cases. The VIP cluster will point to internal per-pod listeners
-		target := model.BuildSubsetKey(model.TrafficDirectionInboundPod, "", host.Name(e.Address), int(e.EndpointPort))
-		addr = util.BuildInternalAddress(target)
-	}
 	healthStatus := core.HealthStatus_HEALTHY
 	// This is enabled by features.SendUnhealthyEndpoints - otherwise they are not tracked.
 	if e.HealthStatus == model.UnHealthy {
@@ -394,23 +403,24 @@ func buildEnvoyLbEndpoint(b *EndpointBuilder, e *model.IstioEndpoint) *endpoint.
 				Address: addr,
 			},
 		},
+		Metadata: &core.Metadata{},
 	}
 
 	// Istio telemetry depends on the metadata value being set for endpoints in the mesh.
 	// Istio endpoint level tls transport socket configuration depends on this logic
 	// Do not remove pilot/pkg/xds/fake.go
-	ep.Metadata = util.BuildLbEndpointMetadata(e.Network, e.TLSMode, e.WorkloadName, e.Namespace, e.Locality.ClusterID, e.Labels)
+	util.BuildLbEndpointMetadata(e.Network, e.TLSMode, e.WorkloadName, e.Namespace, e.Locality.ClusterID, e.Labels, ep.Metadata)
 
 	address, port := e.Address, e.EndpointPort
 	tunnelAddress, tunnelPort := address, model.HBoneInboundListenPort
 
 	supportsTunnel := false
-	// Other side is a waypoint proxy. TODO: can this really happen?
-	if al := e.Labels[ambient.LabelType]; al == ambient.TypeWaypoint {
+	// Other side is a waypoint proxy.
+	if al := e.Labels[constants.ManagedGatewayLabel]; al == constants.ManagedGatewayMeshController {
 		supportsTunnel = true
 	}
 	// Otherwise has ambient enabled. Note: this is a synthetic label, not existing in the real Pod.
-	if al := e.Labels[ambient.LabelStatus]; al == ambient.TypeEnabled {
+	if al := e.Labels[constants.AmbientRedirection]; al == constants.AmbientRedirectionEnabled {
 		supportsTunnel = true
 	}
 	// Otherwise supports tunnel
@@ -432,15 +442,14 @@ func buildEnvoyLbEndpoint(b *EndpointBuilder, e *model.IstioEndpoint) *endpoint.
 	if dir != model.TrafficDirectionInboundVIP && supportsTunnel {
 		// Support connecting to server side waypoint proxy, if the destination has one. This is for sidecars and ingress.
 		if dir == model.TrafficDirectionOutbound && !b.proxy.IsWaypointProxy() && !b.proxy.IsAmbient() {
-			workloads := b.push.AmbientIndex.Waypoints.ByIdentity[e.ServiceAccount]
+			workloads := findWaypoints(b.push, e)
 			if len(workloads) > 0 {
-				// TODO: only ready
 				// TODO: load balance
-				tunnelAddress = workloads[0].PodIP
+				tunnelAddress = workloads[0].String()
 			}
 		}
 		ep.HostIdentifier = &endpoint.LbEndpoint_Endpoint{Endpoint: &endpoint.Endpoint{
-			Address: util.BuildInternalAddressWithIdentifier("outbound-tunnel", net.JoinHostPort(address, strconv.Itoa(int(port)))),
+			Address: util.BuildInternalAddressWithIdentifier(util.OutboundTunnel, net.JoinHostPort(address, strconv.Itoa(int(port)))),
 		}}
 		ep.Metadata.FilterMetadata[model.TunnelLabelShortName] = util.BuildTunnelMetadataStruct(tunnelAddress, address, int(port), tunnelPort)
 		ep.Metadata.FilterMetadata[util.EnvoyTransportSocketMetadataKey] = &structpb.Struct{
@@ -449,8 +458,52 @@ func buildEnvoyLbEndpoint(b *EndpointBuilder, e *model.IstioEndpoint) *endpoint.
 			},
 		}
 	}
+	if dir == model.TrafficDirectionInboundVIP {
+		inScope := waypointInScope(b.proxy, e)
+		if !inScope {
+			// A waypoint can *partially* select a Service in edge cases. In this case, some % of requests will
+			// go through the waypoint, and the rest direct. Since these have already been load balanced across,
+			// we want to make sure we only send to workloads behind our waypoint
+			return nil
+		}
+		// For inbound, we only use EDS for the VIP cases. The VIP cluster will point to encap listener.
+		if supportsTunnel {
+			address := e.Address
+			tunnelPort := 15008
+			// We will connect to CONNECT origination internal listener, telling it to tunnel to ip:15008,
+			// and add some detunnel metadata that had the original port.
+			tunnelOrigLis := "connect_originate"
+			ep.Metadata.FilterMetadata[model.TunnelLabelShortName] = util.BuildTunnelMetadataStruct(address, address, int(e.EndpointPort), tunnelPort)
+			ep = util.BuildInternalLbEndpoint(tunnelOrigLis, ep.Metadata)
+			ep.LoadBalancingWeight = &wrappers.UInt32Value{
+				Value: e.GetLoadBalancingWeight(),
+			}
+		}
+	}
 
 	return ep
+}
+
+// waypointInScope computes whether the endpoint is owned by the waypoint
+func waypointInScope(waypoint *model.Proxy, e *model.IstioEndpoint) bool {
+	scope := waypoint.WaypointScope()
+	if scope.Namespace != e.Namespace {
+		return false
+	}
+	ident, _ := spiffe.ParseIdentity(e.ServiceAccount)
+	if scope.ServiceAccount != "" && (scope.ServiceAccount != ident.ServiceAccount) {
+		return false
+	}
+	return true
+}
+
+func findWaypoints(push *model.PushContext, e *model.IstioEndpoint) []netip.Addr {
+	ident, _ := spiffe.ParseIdentity(e.ServiceAccount)
+	ips := push.WaypointsFor(model.WaypointScope{
+		Namespace:      e.Namespace,
+		ServiceAccount: ident.ServiceAccount,
+	}).UnsortedList()
+	return ips
 }
 
 // TODO this logic is probably done elsewhere in XDS, possible code-reuse + perf improvements
@@ -583,7 +636,7 @@ func trafficPolicyTLSModeForPort(tp *networkingapi.TrafficPolicy, port int) *net
 	}
 	// if there is a port-level setting matching this cluster
 	for _, portSettings := range tp.GetPortLevelSettings() {
-		if int(portSettings.Port.Number) == port && portSettings.Tls != nil {
+		if int(portSettings.GetPort().GetNumber()) == port && portSettings.Tls != nil {
 			mode = &portSettings.Tls.Mode
 			break
 		}

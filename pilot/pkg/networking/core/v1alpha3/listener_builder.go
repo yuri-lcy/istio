@@ -30,7 +30,6 @@ import (
 	extensions "istio.io/api/extensions/v1alpha1"
 	meshconfig "istio.io/api/mesh/v1alpha1"
 	networking "istio.io/api/networking/v1alpha3"
-	"istio.io/istio/pilot/pkg/ambient"
 	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
 	istionetworking "istio.io/istio/pilot/pkg/networking"
@@ -92,29 +91,6 @@ func NewListenerBuilder(configgen *ConfigGeneratorImpl, node *model.Proxy, push 
 	builder.authzBuilder = authz.NewBuilder(authz.Local, push, node)
 	builder.authzCustomBuilder = authz.NewBuilder(authz.Custom, push, node)
 	return builder
-}
-
-func (lb *ListenerBuilder) WithWorkload(wl ambient.Workload) *ListenerBuilder {
-	dummy := &model.Proxy{
-		ConfigNamespace: wl.Namespace,
-		Labels:          wl.Labels,
-		Type:            lb.node.Type,
-	}
-	return &ListenerBuilder{
-		node:                    lb.node,
-		push:                    lb.push,
-		gatewayListeners:        lb.gatewayListeners,
-		inboundListeners:        lb.inboundListeners,
-		outboundListeners:       lb.outboundListeners,
-		httpProxyListener:       lb.httpProxyListener,
-		virtualOutboundListener: lb.virtualOutboundListener,
-		virtualInboundListener:  lb.virtualInboundListener,
-		envoyFilterWrapper:      lb.envoyFilterWrapper,
-		authnBuilder:            lb.authnBuilder,
-		authzBuilder:            authz.NewBuilder(authz.Local, lb.push, dummy),
-		authzCustomBuilder:      authz.NewBuilder(authz.Custom, lb.push, dummy),
-		Discovery:               lb.Discovery,
-	}
 }
 
 func (lb *ListenerBuilder) WithAcmgWorkload(wl acmg.Workload) *ListenerBuilder {
@@ -183,7 +159,7 @@ func (lb *ListenerBuilder) buildVirtualOutboundListener() *ListenerBuilder {
 
 	filterChains := buildOutboundCatchAllNetworkFilterChains(lb.node, lb.push)
 
-	actualWildcards, _ := getWildcardsAndLocalHostForDualStack(lb.node.GetIPMode())
+	actualWildcards, _ := getWildcardsAndLocalHost(lb.node.GetIPMode())
 	// add an extra listener that binds to the port that is the recipient of the iptables redirect
 	ipTablesListener := &listener.Listener{
 		Name:             model.VirtualOutboundListenerName,
@@ -194,7 +170,7 @@ func (lb *ListenerBuilder) buildVirtualOutboundListener() *ListenerBuilder {
 		TrafficDirection: core.TrafficDirection_OUTBOUND,
 	}
 	// add extra addresses for the listener
-	if len(actualWildcards) > 1 {
+	if features.EnableDualStack && len(actualWildcards) > 1 {
 		ipTablesListener.AdditionalAddresses = util.BuildAdditionalAddresses(actualWildcards[1:], uint32(lb.push.Mesh.ProxyListenPort), lb.node)
 	}
 
@@ -418,25 +394,23 @@ func (lb *ListenerBuilder) buildHTTPConnectionManager(httpOpts *httpListenerOpts
 	routerFilterCtx, reqIDExtensionCtx := configureTracing(lb.push, lb.node, connectionManager, httpOpts.class)
 
 	filters := []*hcm.HttpFilter{}
-	wasm := lb.push.WasmPluginsByListenerInfo(lb.node, model.WasmPluginListenerInfo{
-		Port:  httpOpts.port,
-		Class: httpOpts.class,
-	})
+	if !httpOpts.isWaypoint {
+		wasm := lb.push.WasmPluginsByListenerInfo(lb.node, model.WasmPluginListenerInfo{
+			Port:  httpOpts.port,
+			Class: httpOpts.class,
+		})
 
-	// Metadata exchange filter needs to be added before any other HTTP filters are added. This is done to
-	// ensure that mx filter comes before HTTP RBAC filter. This is related to https://github.com/istio/istio/issues/41066
-	if features.MetadataExchange && !httpOpts.hbone && !lb.node.IsAmbient() {
-		filters = append(filters, xdsfilters.HTTPMx)
-	}
-
-	if !httpOpts.skipRBACFilters { // TODO poorly named, probably should skip more. Meant for outer HBONE listener
+		// Metadata exchange filter needs to be added before any other HTTP filters are added. This is done to
+		// ensure that mx filter comes before HTTP RBAC filter. This is related to https://github.com/istio/istio/issues/41066
+		if features.MetadataExchange && !httpOpts.hbone && !lb.node.IsAmbient() {
+			filters = append(filters, xdsfilters.HTTPMx)
+		}
 		// TODO: how to deal with ext-authz? It will be in the ordering twice
 		filters = append(filters, lb.authzCustomBuilder.BuildHTTP(httpOpts.class)...)
 		filters = extension.PopAppend(filters, wasm, extensions.PluginPhase_AUTHN)
 		filters = append(filters, lb.authnBuilder.BuildHTTP(httpOpts.class)...)
 		filters = extension.PopAppend(filters, wasm, extensions.PluginPhase_AUTHZ)
 		filters = append(filters, lb.authzBuilder.BuildHTTP(httpOpts.class)...)
-
 		// TODO: these feel like the wrong place to insert, but this retains backwards compatibility with the original implementation
 		filters = extension.PopAppend(filters, wasm, extensions.PluginPhase_STATS)
 		filters = extension.PopAppend(filters, wasm, extensions.PluginPhase_UNSPECIFIED_PHASE)
@@ -459,8 +433,12 @@ func (lb *ListenerBuilder) buildHTTPConnectionManager(httpOpts *httpListenerOpts
 
 	// TypedPerFilterConfig in route needs these filters.
 	filters = append(filters, xdsfilters.Fault, xdsfilters.Cors)
-	if !httpOpts.skipTelemetryFilters {
+	if !httpOpts.isWaypoint {
 		filters = append(filters, lb.push.Telemetry.HTTPFilters(lb.node, httpOpts.class)...)
+	}
+	// Add EmptySessionFilter so that it can be overridden at route level per service.
+	if features.EnablePersistentSessionFilter && httpOpts.class != istionetworking.ListenerClassSidecarInbound {
+		filters = append(filters, xdsfilters.EmptySessionFilter)
 	}
 	filters = append(filters, xdsfilters.BuildRouterFilter(routerFilterCtx))
 

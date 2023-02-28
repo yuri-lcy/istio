@@ -4,9 +4,9 @@ metadata:
   name: ztunnel
   namespace: {{ .Release.Namespace }}
   labels:
-{{- range $key, $val := .Values.ztunnel.deploymentLabels }}
-    {{ $key }}: "{{ $val }}"
-{{- end }}
+    {{- .Values.labels | toYaml | nindent 4}}
+  annotations:
+    {{- .Values.annotations | toYaml | nindent 4 }}
 spec:
   updateStrategy:
     rollingUpdate:
@@ -20,15 +20,11 @@ spec:
       labels:
         sidecar.istio.io/inject: "false"
         app: ztunnel
-        ambient-type: ztunnel
-        {{- range $key, $val := .Values.ztunnel.podLabels }}
-        {{ $key }}: "{{ $val }}"
-        {{- end }}
+{{ with .Values.podLabels -}}{{ toYaml . | indent 8 }}{{ end }}
       annotations:
+        ambient.istio.io/redirection: disabled
         sidecar.istio.io/inject: "false"
-        {{- if .Values.ztunnel.podAnnotations }}
-{{ toYaml .Values.ztunnel.podAnnotations | indent 8 }}
-        {{- end }}
+{{ with .Values.podAnnotations -}}{{ toYaml . | indent 8 }}{{ end }}
     spec:
       serviceAccountName: ztunnel
       tolerations:
@@ -40,14 +36,14 @@ spec:
           operator: Exists
       initContainers:
       - name: istio-init
-{{- if contains "/" .Values.ztunnel.image }}
-        image: "{{ .Values.ztunnel.image }}"
+{{- if contains "/" .Values.image }}
+        image: "{{ .Values.image }}"
 {{- else }}
-        {{/*  TODO(https://github.com/solo-io/istio-sidecarless/issues/281): use distroless, but we are depending on a variant of things not in the distroless image */}}
-        image: "{{ .Values.ztunnel.hub | default .Values.global.hub }}/{{ .Values.ztunnel.image | default "ztunnel" }}:{{ .Values.ztunnel.tag | default .Values.global.tag }}"
+        {{/*  TODO(https://github.com/istio/istio/issues/43243): use distroless, but we are depending on a variant of things not in the distroless image */}}
+        image: "{{ .Values.hub }}/{{ .Values.image | default "ztunnel" }}:{{ .Values.tag }}{{with (.Values.variant )}}-{{.}}{{end}}"
 {{- end }}
-{{- if .Values.global.imagePullPolicy }}
-        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+{{- with .Values.imagePullPolicy }}
+        imagePullPolicy: {{ . }}
 {{- end }}
         securityContext:
           privileged: true
@@ -59,14 +55,11 @@ spec:
           - -c
           - |
             set -ex
-            # START https://github.com/solo-io/istio-sidecarless/blob/master/redirect-worker.sh#L198-L205
-            PROXY_OUTBOUND_MARK=0x401/0xfff
-            PROXY_INBOUND_MARK=0x402/0xfff
+
             PROXY_ORG_SRC_MARK=0x4d2/0xfff
             # tproxy mark, it's only used here.
             MARK=0x400/0xfff
             ORG_SRC_RET_MARK=0x4d3/0xfff
-            # END https://github.com/solo-io/istio-sidecarless/blob/master/redirect-worker.sh#L198-L205
 
             # Below is from config.sh but used in redirect-worker.sh as well
             POD_OUTBOUND=15001
@@ -109,7 +102,6 @@ spec:
             # needed for original src.
             PROXY_ROUTE_TABLE=102
 
-            # START https://github.com/solo-io/istio-sidecarless/blob/master/redirect-worker.sh#L185-L196
             set +e # Only for delete, we don't care if this fails
             ip link del p$INBOUND_TUN
             ip link del p$OUTBOUND_TUN
@@ -129,9 +121,7 @@ spec:
 
             echo 0 > /proc/sys/net/ipv4/conf/p$INBOUND_TUN/rp_filter
             echo 0 > /proc/sys/net/ipv4/conf/p$OUTBOUND_TUN/rp_filter
-            # END https://github.com/solo-io/istio-sidecarless/blob/master/redirect-worker.sh#L185-L196
 
-            # START https://github.com/solo-io/istio-sidecarless/blob/master/redirect-worker.sh#L206-L238
             set +e # Only for delete, we don't care if this fails
             ip rule del priority 20000
             ip rule del priority 20001
@@ -144,8 +134,6 @@ spec:
             set -e
 
             ip rule add priority 20000 fwmark $MARK lookup 100
-            ip rule add priority 20001 fwmark $PROXY_OUTBOUND_MARK lookup 101
-            ip rule add priority 20002 fwmark $PROXY_INBOUND_MARK lookup 102
             ip rule add priority 20003 fwmark $ORG_SRC_RET_MARK lookup 100
             ip route add local 0.0.0.0/0 dev lo table 100
 
@@ -176,28 +164,11 @@ spec:
             $IPTABLES -t mangle -F PREROUTING
             $IPTABLES -t nat -F OUTPUT
 
-            $IPTABLES-save | grep -v LOG | $IPTABLES-restore
-            $IPTABLES -t mangle -I PREROUTING -j LOG --log-prefix "mangle pre [$POD_NAME] "
-            $IPTABLES -t mangle -I POSTROUTING -j LOG --log-prefix "mangle post [$POD_NAME] "
-            $IPTABLES -t mangle -I INPUT -j LOG --log-prefix "mangle inp [$POD_NAME] "
-            $IPTABLES -t mangle -I OUTPUT -j LOG --log-prefix "mangle out [$POD_NAME] "
-            $IPTABLES -t mangle -I FORWARD -j LOG --log-prefix "mangle fw [$POD_NAME] "
-            $IPTABLES -t nat -I POSTROUTING -j LOG --log-prefix "nat post [$POD_NAME] "
-            $IPTABLES -t nat -I INPUT -j LOG --log-prefix "nat inp [$POD_NAME] "
-            $IPTABLES -t nat -I OUTPUT -j LOG --log-prefix "nat out [$POD_NAME] "
-            $IPTABLES -t nat -I PREROUTING -j LOG --log-prefix "nat pre [$POD_NAME] "
-            $IPTABLES -t raw -I PREROUTING -j LOG --log-prefix "raw pre [$POD_NAME] "
-            $IPTABLES -t raw -I OUTPUT -j LOG --log-prefix "raw out [$POD_NAME] "
-            $IPTABLES -t filter -I FORWARD -j LOG --log-prefix "filt fw [$POD_NAME] "
-            $IPTABLES -t filter -I OUTPUT -j LOG --log-prefix "filt out [$POD_NAME] "
-            $IPTABLES -t filter -I INPUT -j LOG --log-prefix "filt inp [$POD_NAME] "
-
             $IPTABLES -t mangle -A PREROUTING -p tcp -i p$INBOUND_TUN -m tcp --dport=$POD_INBOUND -j TPROXY --tproxy-mark $MARK --on-port $POD_INBOUND --on-ip 127.0.0.1
             $IPTABLES -t mangle -A PREROUTING -p tcp -i p$OUTBOUND_TUN -j TPROXY --tproxy-mark $MARK --on-port $POD_OUTBOUND --on-ip 127.0.0.1
             $IPTABLES -t mangle -A PREROUTING -p tcp -i p$INBOUND_TUN -j TPROXY --tproxy-mark $MARK --on-port $POD_INBOUND_PLAINTEXT --on-ip 127.0.0.1
 
             $IPTABLES -t mangle -A PREROUTING -p tcp -i eth0 ! --dst $INSTANCE_IP -j MARK --set-mark $ORG_SRC_RET_MARK
-            # END https://github.com/solo-io/istio-sidecarless/blob/master/redirect-worker.sh#L206-L238
             # With normal linux routing we need to disable the rp_filter
             # as we get packets from a tunnel that doesn't have default routes.
             echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter
@@ -222,26 +193,34 @@ spec:
           value: "{{ $value }}"
         {{- end }}
         {{- end }}
-        {{- if .Values.ztunnel.env }}
-        {{- range $key, $val := .Values.ztunnel.env }}
+        {{- with .Values.env }}
+        {{- range $key, $val := . }}
         - name: {{ $key }}
           value: "{{ $val }}"
         {{- end }}
         {{- end }}
       containers:
       - name: istio-proxy
-{{- if contains "/" .Values.ztunnel.image }}
-        image: "{{ .Values.ztunnel.image }}"
+{{- if contains "/" .Values.image }}
+        image: "{{ .Values.image }}"
 {{- else }}
-        image: "{{ .Values.ztunnel.hub | default .Values.global.hub }}/{{ .Values.ztunnel.image | default "proxyv2" }}:{{ .Values.ztunnel.tag | default .Values.global.tag }}{{with (.Values.ztunnel.variant | default .Values.global.variant)}}-{{.}}{{end}}"
+        image: "{{ .Values.hub }}/{{ .Values.image | default "ztunnel" }}:{{ .Values.tag }}{{with (.Values.variant )}}-{{.}}{{end}}"
 {{- end }}
-{{- if .Values.global.imagePullPolicy }}
-        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+{{- with .Values.imagePullPolicy }}
+        imagePullPolicy: {{ . }}
 {{- end }}
         securityContext:
+          allowPrivilegeEscalation: false
+          privileged: false
           capabilities:
+            drop:
+            - ALL
             add:
             - NET_ADMIN
+          readOnlyRootFilesystem: true
+          runAsGroup: 1337
+          runAsNonRoot: false
+          runAsUser: 0
         readinessProbe:
           httpGet:
             port: 15021
@@ -251,7 +230,7 @@ spec:
         - ztunnel
         env:
         - name: CLUSTER_ID
-          value: {{ .Values.global.multiCluster.clusterName | default "Kubernetes" }}
+          value: {{ .Values.multiCluster.clusterName | default "Kubernetes" }}
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -278,8 +257,8 @@ spec:
           value: "{{ $value }}"
         {{- end }}
         {{- end }}
-        {{- if .Values.ztunnel.env }}
-        {{- range $key, $val := .Values.ztunnel.env }}
+        {{- with .Values.env }}
+        {{- range $key, $val := . }}
         - name: {{ $key }}
           value: "{{ $val }}"
         {{- end }}

@@ -33,7 +33,7 @@ import (
 
 // ServiceController is a mock service controller
 type ServiceController struct {
-	svcHandlers []func(*model.Service, model.Event)
+	svcHandlers []model.ServiceHandler
 
 	sync.RWMutex
 }
@@ -44,7 +44,7 @@ var _ model.Controller = &ServiceController{}
 func (c *ServiceController) AppendWorkloadHandler(func(*model.WorkloadInstance, model.Event)) {}
 
 // AppendServiceHandler appends a service handler to the controller
-func (c *ServiceController) AppendServiceHandler(f func(*model.Service, model.Event)) {
+func (c *ServiceController) AppendServiceHandler(f model.ServiceHandler) {
 	c.Lock()
 	c.svcHandlers = append(c.svcHandlers, f)
 	c.Unlock()
@@ -94,6 +94,10 @@ func (sd *ServiceDiscovery) AdditionalPodSubscriptions(_ *model.Proxy, _, _ sets
 }
 
 func (sd *ServiceDiscovery) Policies(requested sets.Set[model.ConfigKey]) []*workloadapi.Authorization {
+	return nil
+}
+
+func (sd *ServiceDiscovery) AmbientSnapshot() *model.AmbientSnapshot {
 	return nil
 }
 
@@ -152,12 +156,9 @@ func (sd *ServiceDiscovery) AddServiceNotify(svc *model.Service) {
 	sd.AddService(svc)
 	sd.XdsUpdater.SvcUpdate(sd.shardKey(), string(svc.Hostname), svc.Attributes.Namespace, model.EventAdd)
 	pushReq := &model.PushRequest{
-		Full: true,
-		ConfigsUpdated: map[model.ConfigKey]struct{}{{
-			Kind:      kind.ServiceEntry,
-			Name:      string(svc.Hostname),
-			Namespace: svc.Attributes.Namespace,
-		}: {}},
+		Full:           true,
+		ConfigsUpdated: sets.New(model.ConfigKey{Kind: kind.ServiceEntry, Name: string(svc.Hostname), Namespace: svc.Attributes.Namespace}),
+
 		Reason: []model.TriggerReason{model.ServiceUpdate},
 	}
 	sd.XdsUpdater.ConfigUpdate(pushReq)
@@ -320,7 +321,7 @@ func (sd *ServiceDiscovery) GetService(hostname host.Name) *model.Service {
 
 // InstancesByPort filters the service instances by labels. This assumes single port, as is
 // used by EDS/ADS.
-func (sd *ServiceDiscovery) InstancesByPort(svc *model.Service, port int, labels labels.Instance) []*model.ServiceInstance {
+func (sd *ServiceDiscovery) InstancesByPort(svc *model.Service, port int) []*model.ServiceInstance {
 	sd.mutex.Lock()
 	defer sd.mutex.Unlock()
 	if sd.InstancesError != nil {

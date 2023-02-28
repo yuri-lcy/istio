@@ -1,5 +1,4 @@
 //go:build integ
-// +build integ
 
 // Copyright Istio Authors
 //
@@ -23,17 +22,25 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"istio.io/istio/pkg/config/constants"
+	"istio.io/istio/pkg/kube/inject"
+	"istio.io/istio/pkg/test/env"
 	"istio.io/istio/pkg/test/framework"
 	"istio.io/istio/pkg/test/framework/components/echo"
 	"istio.io/istio/pkg/test/framework/components/istio"
+	"istio.io/istio/pkg/test/framework/components/istioctl"
 	"istio.io/istio/pkg/test/framework/components/namespace"
 	"istio.io/istio/pkg/test/framework/resource"
 	"istio.io/istio/pkg/test/framework/resource/config/apply"
+	"istio.io/istio/pkg/test/framework/resource/config/cleanup"
 	kubetest "istio.io/istio/pkg/test/kube"
+	"istio.io/istio/pkg/test/util/assert"
+	"istio.io/istio/pkg/test/util/file"
 	"istio.io/istio/pkg/test/util/retry"
 )
 
@@ -44,6 +51,7 @@ const (
 	bookinfoGateway = bookinfoDir + "networking/bookinfo-gateway.yaml"
 	routingV1       = bookinfoDir + "networking/virtual-service-all-v1.yaml"
 	headerRouting   = bookinfoDir + "networking/virtual-service-reviews-test-v2.yaml"
+	templateFile    = "manifests/charts/istio-control/istio-discovery/files/waypoint.yaml"
 )
 
 func TestBookinfo(t *testing.T) {
@@ -56,7 +64,7 @@ func TestBookinfo(t *testing.T) {
 				Prefix: "bookinfo",
 				Inject: false,
 				Labels: map[string]string{
-					"istio.io/dataplane-mode": "ambient",
+					constants.DataplaneMode: "ambient",
 				},
 			})
 			if err != nil {
@@ -187,6 +195,34 @@ func TestBookinfo(t *testing.T) {
 					})
 				})
 			})
+			t.NewSubTest("waypoint template change").Run(func(t framework.TestContext) {
+				// Test will modify grace period as an arbitrary change to check we re-deploy the waypoint
+				getGracePeriod := func(want int64) bool {
+					pods, err := kubetest.NewPodFetch(t.AllClusters()[0], nsConfig.Name(), constants.GatewayNameLabel+"=bookinfo-reviews")()
+					assert.NoError(t, err)
+					for _, p := range pods {
+						grace := p.Spec.TerminationGracePeriodSeconds
+						if grace != nil && *grace == want {
+							return true
+						}
+					}
+					return false
+				}
+				// check that waypoint deployment is unmodified
+				retry.UntilOrFail(t, func() bool {
+					return getGracePeriod(2)
+				})
+				// modify template
+				istio.GetOrFail(t, t).UpdateInjectionConfig(t, func(c *inject.Config) error {
+					mainTemplate := file.MustAsString(filepath.Join(env.IstioSrc, templateFile))
+					c.RawTemplates["waypoint"] = strings.ReplaceAll(mainTemplate, "terminationGracePeriodSeconds: 2", "terminationGracePeriodSeconds: 3")
+					return nil
+				}, cleanup.Always)
+				// check that waypoint deployment is modified
+				retry.UntilOrFail(t, func() bool {
+					return getGracePeriod(3)
+				})
+			})
 		})
 }
 
@@ -197,18 +233,18 @@ func applyDefaultRouting(t framework.TestContext, nsConfig namespace.Instance) {
 }
 
 func setupWaypoints(t framework.TestContext, nsConfig namespace.Instance) {
-	if err := t.ConfigIstio().YAML(nsConfig.Name(), `apiVersion: gateway.networking.k8s.io/v1alpha2
-kind: Gateway
-metadata:
-  name: bookinfo-waypoints
-  annotations:
-    istio.io/service-account: bookinfo-reviews
-spec:
-  gatewayClassName: istio-mesh`).Apply(apply.NoCleanup); err != nil {
-		t.Fatal(err)
-	}
+	istioctl.NewOrFail(t, t, istioctl.Config{}).InvokeOrFail(t, []string{
+		"x",
+		"waypoint",
+		"apply",
+		"--namespace",
+		nsConfig.Name(),
+		"--service-account",
+		"bookinfo-reviews",
+	})
 	waypointError := retry.UntilSuccess(func() error {
-		if _, err := kubetest.CheckPodsAreReady(kubetest.NewPodFetch(t.AllClusters()[0], nsConfig.Name(), "ambient-type=waypoint")); err != nil {
+		fetch := kubetest.NewPodFetch(t.AllClusters()[0], nsConfig.Name(), constants.GatewayNameLabel+"=bookinfo-reviews")
+		if _, err := kubetest.CheckPodsAreReady(fetch); err != nil {
 			return fmt.Errorf("gateway is not ready: %v", err)
 		}
 		return nil

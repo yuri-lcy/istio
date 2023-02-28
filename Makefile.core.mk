@@ -35,10 +35,11 @@ ISTIO_GO := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 export ISTIO_GO
 SHELL := /bin/bash -o pipefail
 
-export VERSION ?= 1.17-dev
+export VERSION ?= 1.18-dev
 
 # Base version of Istio image to use
-BASE_VERSION ?= master-2022-11-02T13-32-04
+BASE_VERSION ?= master-2023-02-08T19-00-55
+ISTIO_BASE_REGISTRY ?= gcr.io/istio-release
 
 export GO111MODULE ?= on
 export GOPROXY ?= https://proxy.golang.org
@@ -162,7 +163,7 @@ $(TARGET_OUT)/istio_is_init: bin/init.sh istio.deps | $(TARGET_OUT)
 
 .PHONY: init-ztunnel-rs
 init-ztunnel-rs:
-	@TARGET_OUT=$(TARGET_OUT) bin/build_ztunnel.sh
+	TARGET_OUT=$(TARGET_OUT) bin/build_ztunnel.sh
 
 # Pull dependencies such as envoy
 depend: init | $(TARGET_OUT)
@@ -201,17 +202,15 @@ endif
 # List of all binaries to build
 # We split the binaries into "agent" binaries and standard ones. This corresponds to build "agent".
 # This allows conditional compilation to avoid pulling in costly dependencies to the agent, such as XDS and k8s.
-AGENT_BINARIES:=./pilot/cmd/pilot-agent
+AGENT_BINARIES:=./pilot/cmd/pilot-agent ./cni/cmd/istio-cni
 STANDARD_BINARIES:=./istioctl/cmd/istioctl \
   ./pilot/cmd/pilot-discovery \
   ./pkg/test/echo/cmd/client \
   ./pkg/test/echo/cmd/server \
   ./samples/extauthz/cmd/extauthz \
   ./operator/cmd/operator \
-  ./cni/cmd/istio-cni \
   ./cni/cmd/istio-cni-taint \
   ./cni/cmd/install-cni \
-  ./tools/istio-iptables \
   ./tools/bug-report
 BINARIES:=$(STANDARD_BINARIES) $(AGENT_BINARIES)
 
@@ -266,7 +265,7 @@ lint-helm-global:
 
 lint: lint-python lint-copyright-banner lint-scripts lint-go lint-dockerfiles lint-markdown lint-yaml lint-licenses lint-helm-global ## Runs all linters.
 	@bin/check_samples.sh
-	# @testlinter # Disables since linter assumes istio/istio isues link
+	@testlinter
 	@envvarlinter istioctl pilot security
 
 go-gen:

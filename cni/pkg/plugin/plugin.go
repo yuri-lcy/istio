@@ -62,7 +62,7 @@ type Kubernetes struct {
 // is passed in on stdin. Your plugin may wish to expose its functionality via
 // runtime args, see CONVENTIONS.md in the CNI spec.
 type Config struct {
-	types.NetConf // You may wish to not nest this type
+	types.NetConf           // You may wish to not nest this type
 	RuntimeConfig *struct { // SampleConfig map[string]interface{} `json:"sample"`
 	} `json:"runtimeConfig"`
 
@@ -79,6 +79,7 @@ type Config struct {
 	// Add plugin-specific flags here
 	LogLevel        string     `json:"log_level"`
 	LogUDSAddress   string     `json:"log_uds_address"`
+	AmbientEnabled  bool       `json:"ambient_enabled"`
 	Kubernetes      Kubernetes `json:"kubernetes"`
 	HostNSEnterExec bool       `json:"hostNSEnterExec"`
 }
@@ -185,20 +186,15 @@ func CmdAdd(args *skel.CmdArgs) (err error) {
 	} else {
 		loggedPrevResult = conf.PrevResult
 	}
-	// TODO: Reset back to Debugf
-	log.Infof("istio-cni IfName=%s", args.IfName)
-	log.Infof("istio-cni CmdAdd config: %+v", conf)
-	log.Infof("istio-cni CmdAdd previous result: %+v", loggedPrevResult)
+	log.WithLabels("if", args.IfName).Debugf("istio-cni CmdAdd config: %+v", conf)
+	log.Debugf("istio-cni CmdAdd previous result: %+v", loggedPrevResult)
 
 	// Determine if running under k8s by checking the CNI args
-	log.Infof("istio-cni cmdAdd args: %+v", args.Args)
 	k8sArgs := K8sArgs{}
 	if err := types.LoadArgs(args.Args, &k8sArgs); err != nil {
 		return err
 	}
 
-	// TODO: Reset back to Debugf
-	log.Infof("istio-cni cmdAdd with k8s args: %+v", k8sArgs)
 	if conf.Kubernetes.InterceptRuleMgrType != "" {
 		interceptRuleMgrType = conf.Kubernetes.InterceptRuleMgrType
 	}
@@ -208,17 +204,10 @@ func CmdAdd(args *skel.CmdArgs) (err error) {
 		log.Errorf("istio-cni cmdAdd failed to read acmg config %v", err)
 	}
 
-	ambientConf, err := ambient.ReadAmbientConfig()
-	if err != nil {
-		log.Errorf("istio-cni cmdAdd failed to read ambient config %v", err)
-		return err
-	}
-
 	// Check if the workload is running under Kubernetes.
 	// TODO(bianpengyuan): refactor the following code to make it less nested.
 	podNamespace := string(k8sArgs.K8S_POD_NAMESPACE)
 	podName := string(k8sArgs.K8S_POD_NAME)
-
 	if podNamespace != "" && podName != "" {
 		excludePod := false
 		for _, excludeNs := range conf.Kubernetes.ExcludeNamespaces {
@@ -243,21 +232,34 @@ func CmdAdd(args *skel.CmdArgs) (err error) {
 				log.Errorf("istio-cni cmdAdd failed to check acmg: %s", err)
 			}
 		}
-		log.Infof("ambientConf.Mode: %s", ambientConf.Mode)
-		log.Infof("ambientConf.ZTunnelReady: %v", ambientConf.ZTunnelReady)
-		if !excludePod && ambientConf.Mode != ambient.AmbientMeshOff.String() && ambientConf.ZTunnelReady {
-			podIPs, err := getPodIPs(args.IfName, conf.PrevResult)
+		if conf.AmbientEnabled {
+
+			ambientConf, err := ambient.ReadAmbientConfig()
 			if err != nil {
-				log.Errorf("istio-cni cmdAdd failed to get pod IPs: %s", err)
+				log.Errorf("istio-cni cmdAdd failed to read ambient config %v", err)
 				return err
 			}
-			log.Infof("istio-cni cmdAdd podName: %s podIPs: %+v", podName, podIPs)
-			added, err = checkAmbient(*conf, *ambientConf, podName, podNamespace, args.IfName, podIPs)
-			if err != nil {
-				log.Errorf("istio-cni cmdAdd failed to check ambient: %s", err)
+
+			log.Debugf("ambientConf.ZTunnelReady: %v", ambientConf.ZTunnelReady)
+			if !excludePod && ambientConf.ZTunnelReady {
+				podIPs, err := getPodIPs(args.IfName, conf.PrevResult)
+				if err != nil {
+					log.Errorf("istio-cni cmdAdd failed to get pod IPs: %s", err)
+					return err
+				}
+				log.Infof("istio-cni cmdAdd podName: %s podIPs: %+v", podName, podIPs)
+				added, err = checkAmbient(*conf, *ambientConf, podName, podNamespace, args.IfName, podIPs)
+				if err != nil {
+					log.Errorf("istio-cni cmdAdd failed to check ambient: %s", err)
+				}
+			}
+
+			if added {
+				return pluginResponse(conf)
 			}
 		}
-		if !added && !excludePod {
+
+		if !excludePod {
 			client, err := newKubeClient(*conf)
 			if err != nil {
 				return err
@@ -332,13 +334,17 @@ func CmdAdd(args *skel.CmdArgs) (err error) {
 			} else {
 				log.Infof("Pod %s/%s excluded because it only has %d containers", podNamespace, podName, len(pi.Containers))
 			}
-		} else if !added {
-			log.Infof("Pod %s/%s excluded from sidecar", podNamespace, podName)
+		} else {
+			log.Infof("Pod %s/%s excluded", podNamespace, podName)
 		}
 	} else {
 		log.Debugf("Not a kubernetes pod")
 	}
 
+	return pluginResponse(conf)
+}
+
+func pluginResponse(conf *Config) error {
 	var result *cniv1.Result
 	if conf.PrevResult == nil {
 		result = &cniv1.Result{
@@ -348,7 +354,6 @@ func CmdAdd(args *skel.CmdArgs) (err error) {
 		// Pass through the result for the next plugin
 		result = conf.PrevResult
 	}
-
 	return types.PrintResult(result, conf.CNIVersion)
 }
 

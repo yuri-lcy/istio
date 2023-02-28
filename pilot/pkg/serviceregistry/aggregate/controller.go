@@ -56,7 +56,7 @@ type Controller struct {
 
 func (c *Controller) AdditionalPodSubscriptions(proxy *model.Proxy, addr, cur sets.Set[types.NamespacedName]) sets.Set[types.NamespacedName] {
 	res := sets.New[types.NamespacedName]()
-	for _, p := range c.registries {
+	for _, p := range c.GetRegistries() {
 		res = res.Merge(p.AdditionalPodSubscriptions(proxy, addr, cur))
 	}
 	return res
@@ -64,16 +64,24 @@ func (c *Controller) AdditionalPodSubscriptions(proxy *model.Proxy, addr, cur se
 
 func (c *Controller) Policies(requested sets.Set[model.ConfigKey]) []*workloadapi.Authorization {
 	res := []*workloadapi.Authorization{}
-	for _, p := range c.registries {
+	for _, p := range c.GetRegistries() {
 		res = append(res, p.Policies(requested)...)
 	}
 	return res
 }
 
+func (c *Controller) AmbientSnapshot() *model.AmbientSnapshot {
+	m := &model.AmbientSnapshot{}
+	for _, p := range c.GetRegistries() {
+		m = m.Merge(p.AmbientSnapshot())
+	}
+	return m
+}
+
 func (c *Controller) PodInformation(addresses sets.Set[types.NamespacedName]) ([]*model.WorkloadInfo, []string) {
 	i := []*model.WorkloadInfo{}
 	removed := sets.New[string]()
-	for _, p := range c.registries {
+	for _, p := range c.GetRegistries() {
 		wis, r := p.PodInformation(addresses)
 		i = append(i, wis...)
 		removed.InsertAll(r...)
@@ -113,9 +121,9 @@ func (c *Controller) addRegistry(registry serviceregistry.Instance, stop <-chan 
 	// Observe the registry for events.
 	registry.AppendNetworkGatewayHandler(c.NotifyGatewayHandlers)
 	registry.AppendServiceHandler(c.handlers.NotifyServiceHandlers)
-	registry.AppendServiceHandler(func(service *model.Service, event model.Event) {
+	registry.AppendServiceHandler(func(prev, curr *model.Service, event model.Event) {
 		for _, handlers := range c.getClusterHandlers() {
-			handlers.NotifyServiceHandlers(service, event)
+			handlers.NotifyServiceHandlers(prev, curr, event)
 		}
 	})
 }
@@ -284,10 +292,10 @@ func (c *Controller) MCSServices() []model.MCSServiceInfo {
 
 // InstancesByPort retrieves instances for a service on a given port that match
 // any of the supplied labels. All instances match an empty label list.
-func (c *Controller) InstancesByPort(svc *model.Service, port int, labels labels.Instance) []*model.ServiceInstance {
+func (c *Controller) InstancesByPort(svc *model.Service, port int) []*model.ServiceInstance {
 	var instances []*model.ServiceInstance
 	for _, r := range c.GetRegistries() {
-		instances = append(instances, r.InstancesByPort(svc, port, labels)...)
+		instances = append(instances, r.InstancesByPort(svc, port)...)
 	}
 	return instances
 }
@@ -382,7 +390,7 @@ func (c *Controller) HasSynced() bool {
 	return true
 }
 
-func (c *Controller) AppendServiceHandler(f func(*model.Service, model.Event)) {
+func (c *Controller) AppendServiceHandler(f model.ServiceHandler) {
 	c.handlers.AppendServiceHandler(f)
 }
 
@@ -392,7 +400,7 @@ func (c *Controller) AppendWorkloadHandler(f func(*model.WorkloadInstance, model
 	// c.handlers.AppendWorkloadHandler(f)
 }
 
-func (c *Controller) AppendServiceHandlerForCluster(id cluster.ID, f func(*model.Service, model.Event)) {
+func (c *Controller) AppendServiceHandlerForCluster(id cluster.ID, f model.ServiceHandler) {
 	c.storeLock.Lock()
 	defer c.storeLock.Unlock()
 	handler, ok := c.handlersByCluster[id]

@@ -29,6 +29,7 @@ import (
 	"istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/validation"
+	"istio.io/istio/pkg/ptr"
 	"istio.io/istio/pkg/util/protomarshal"
 	"istio.io/istio/pkg/util/sets"
 	"istio.io/pkg/log"
@@ -42,7 +43,6 @@ func DefaultProxyConfig() *meshconfig.ProxyConfig {
 		ConfigPath:               constants.ConfigPathDir,
 		ClusterName:              &meshconfig.ProxyConfig_ServiceCluster{ServiceCluster: constants.ServiceClusterName},
 		DrainDuration:            durationpb.New(45 * time.Second),
-		ParentShutdownDuration:   durationpb.New(60 * time.Second),
 		TerminationDrainDuration: durationpb.New(5 * time.Second),
 		ProxyAdminPort:           15000,
 		Concurrency:              &wrappers.Int32Value{Value: 2},
@@ -66,8 +66,7 @@ func DefaultProxyConfig() *meshconfig.ProxyConfig {
 // DefaultMeshNetworks returns a default meshnetworks configuration.
 // By default, it is empty.
 func DefaultMeshNetworks() *meshconfig.MeshNetworks {
-	mn := EmptyMeshNetworks()
-	return &mn
+	return ptr.Of(EmptyMeshNetworks())
 }
 
 // DefaultMeshConfig returns the default mesh config.

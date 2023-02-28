@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 
 	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -40,6 +41,7 @@ import (
 	"istio.io/istio/pilot/pkg/networking/util"
 	authn_model "istio.io/istio/pilot/pkg/security/model"
 	"istio.io/istio/pilot/pkg/serviceregistry/provider"
+	networkutil "istio.io/istio/pilot/pkg/util/network"
 	"istio.io/istio/pilot/pkg/util/protoconv"
 	xdsfilters "istio.io/istio/pilot/pkg/xds/filters"
 	v3 "istio.io/istio/pilot/pkg/xds/v3"
@@ -63,10 +65,13 @@ var hboneTransportSocketMatch = &structpb.Struct{
 	},
 }
 
-// passthroughHttpProtocolOptions are http protocol options used for pass through clusters.
+// PassthroughHttpProtocolOptions are http protocol options used for pass through clusters.
 // nolint
 // revive:disable-next-line
-var passthroughHttpProtocolOptions = protoconv.MessageToAny(&http.HttpProtocolOptions{
+var PassthroughHttpProtocolOptions = protoconv.MessageToAny(&http.HttpProtocolOptions{
+	CommonHttpProtocolOptions: &core.HttpProtocolOptions{
+		IdleTimeout: durationpb.New(5 * time.Minute),
+	},
 	UpstreamProtocolOptions: &http.HttpProtocolOptions_UseDownstreamProtocolConfig{
 		UseDownstreamProtocolConfig: &http.HttpProtocolOptions_UseDownstreamHttpConfig{
 			HttpProtocolOptions:  &core.Http1ProtocolOptions{},
@@ -95,22 +100,22 @@ type metadataCerts struct {
 // ClusterBuilder interface provides an abstraction for building Envoy Clusters.
 type ClusterBuilder struct {
 	// Proxy related information used to build clusters.
-	serviceInstances  []*model.ServiceInstance // Service instances of Proxy.
-	metadataCerts     *metadataCerts           // Client certificates specified in metadata.
-	clusterID         string                   // Cluster in which proxy is running.
-	proxyID           string                   // Identifier that uniquely identifies a proxy.
-	proxyVersion      string                   // Version of Proxy.
-	proxyType         model.NodeType           // Indicates whether the proxy is sidecar or gateway.
-	sidecarScope      *model.SidecarScope      // Computed sidecar for the proxy.
-	passThroughBindIP string                   // Passthrough IP to be used while building clusters.
-	supportsIPv4      bool                     // Whether Proxy IPs has IPv4 address.
-	supportsIPv6      bool                     // Whether Proxy IPs has IPv6 address.
-	hbone             bool                     // Does the proxy support HBONE
-	locality          *core.Locality           // Locality information of proxy.
-	proxyLabels       map[string]string        // Proxy labels.
-	proxyView         model.ProxyView          // Proxy view of endpoints.
-	proxyIPAddresses  []string                 // IP addresses on which proxy is listening on.
-	configNamespace   string                   // Proxy config namespace.
+	serviceInstances   []*model.ServiceInstance // Service instances of Proxy.
+	metadataCerts      *metadataCerts           // Client certificates specified in metadata.
+	clusterID          string                   // Cluster in which proxy is running.
+	proxyID            string                   // Identifier that uniquely identifies a proxy.
+	proxyVersion       string                   // Version of Proxy.
+	proxyType          model.NodeType           // Indicates whether the proxy is sidecar or gateway.
+	sidecarScope       *model.SidecarScope      // Computed sidecar for the proxy.
+	passThroughBindIPs []string                 // Passthrough IPs to be used while building clusters.
+	supportsIPv4       bool                     // Whether Proxy IPs has IPv4 address.
+	supportsIPv6       bool                     // Whether Proxy IPs has IPv6 address.
+	hbone              bool                     // Does the proxy support HBONE
+	locality           *core.Locality           // Locality information of proxy.
+	proxyLabels        map[string]string        // Proxy labels.
+	proxyView          model.ProxyView          // Proxy view of endpoints.
+	proxyIPAddresses   []string                 // IP addresses on which proxy is listening on.
+	configNamespace    string                   // Proxy config namespace.
 	// PushRequest to look for updates.
 	req                   *model.PushRequest
 	cache                 model.XdsCache
@@ -123,23 +128,23 @@ type ClusterBuilder struct {
 // NewClusterBuilder builds an instance of ClusterBuilder.
 func NewClusterBuilder(proxy *model.Proxy, req *model.PushRequest, cache model.XdsCache) *ClusterBuilder {
 	cb := &ClusterBuilder{
-		serviceInstances:  proxy.ServiceInstances,
-		proxyID:           proxy.ID,
-		proxyType:         proxy.Type,
-		proxyVersion:      proxy.Metadata.IstioVersion,
-		sidecarScope:      proxy.SidecarScope,
-		passThroughBindIP: getPassthroughBindIP(proxy),
-		supportsIPv4:      proxy.SupportsIPv4(),
-		supportsIPv6:      proxy.SupportsIPv6(),
-		hbone:             proxy.EnableHBONE() || proxy.IsWaypointProxy(),
-		locality:          proxy.Locality,
-		proxyLabels:       proxy.Labels,
-		proxyView:         proxy.GetView(),
-		proxyIPAddresses:  proxy.IPAddresses,
-		configNamespace:   proxy.ConfigNamespace,
-		req:               req,
-		cache:             cache,
-		proxy:             proxy,
+		serviceInstances:   proxy.ServiceInstances,
+		proxyID:            proxy.ID,
+		proxyType:          proxy.Type,
+		proxyVersion:       proxy.Metadata.IstioVersion,
+		sidecarScope:       proxy.SidecarScope,
+		passThroughBindIPs: getPassthroughBindIPs(proxy.GetIPMode()),
+		supportsIPv4:       proxy.SupportsIPv4(),
+		supportsIPv6:       proxy.SupportsIPv6(),
+		hbone:              proxy.EnableHBONE() || proxy.IsWaypointProxy(),
+		locality:           proxy.Locality,
+		proxyLabels:        proxy.Labels,
+		proxyView:          proxy.GetView(),
+		proxyIPAddresses:   proxy.IPAddresses,
+		configNamespace:    proxy.ConfigNamespace,
+		req:                req,
+		cache:              cache,
+		proxy:              proxy,
 	}
 	if proxy.Metadata != nil {
 		if proxy.Metadata.TLSClientCertChain != "" {
@@ -366,10 +371,22 @@ func (cb *ClusterBuilder) buildDefaultCluster(name string, discoveryType cluster
 	ec := NewMutableCluster(c)
 	switch discoveryType {
 	case cluster.Cluster_STRICT_DNS, cluster.Cluster_LOGICAL_DNS:
-		if cb.supportsIPv4 {
+		if networkutil.AllIPv4(cb.proxyIPAddresses) {
+			// IPv4 only
 			c.DnsLookupFamily = cluster.Cluster_V4_ONLY
-		} else {
+		} else if networkutil.AllIPv6(cb.proxyIPAddresses) {
+			// IPv6 only
 			c.DnsLookupFamily = cluster.Cluster_V6_ONLY
+		} else {
+			// Dual Stack
+			if features.EnableDualStack {
+				// If dual-stack, it may be [IPv4, IPv6] or [IPv6, IPv4]
+				// using Cluster_ALL to enable Happy Eyeballsfor upstream connections
+				c.DnsLookupFamily = cluster.Cluster_ALL
+			} else {
+				// keep the original logic if Dual Stack is disable
+				c.DnsLookupFamily = cluster.Cluster_V4_ONLY
+			}
 		}
 		dnsRate := cb.req.Push.Mesh.DnsRefreshRate
 		c.DnsRefreshRate = dnsRate
@@ -385,13 +402,6 @@ func (cb *ClusterBuilder) buildDefaultCluster(name string, discoveryType cluster
 			ClusterName: name,
 			Endpoints:   localityLbEndpoints,
 		}
-	}
-
-	if discoveryType == cluster.Cluster_ORIGINAL_DST {
-		// Extend cleanupInterval beyond 5s default. This ensures that upstream connections will stay
-		// open for up to 60s. With the default of 5s, we may tear things down too quickly for
-		// infrequently accessed services.
-		c.CleanupInterval = &durationpb.Duration{Seconds: 60}
 	}
 
 	// For inbound clusters, the default traffic policy is used. For outbound clusters, the default traffic policy
@@ -418,7 +428,6 @@ func (cb *ClusterBuilder) buildDefaultCluster(name string, discoveryType cluster
 
 	cb.setUpstreamProtocol(ec, port, direction)
 	addTelemetryMetadata(opts, service, direction, allInstances)
-	addNetworkingMetadata(opts, service, direction)
 	return ec
 }
 
@@ -440,6 +449,7 @@ func (cb *ClusterBuilder) buildInboundClusterForPortOrUDS(clusterPort int, bind 
 	}
 	localCluster := cb.buildDefaultCluster(clusterName, clusterType, localityLbEndpoints,
 		model.TrafficDirectionInbound, instance.ServicePort, instance.Service, allInstance)
+
 	// If stat name is configured, build the alt statname.
 	if len(cb.req.Push.Mesh.InboundClusterStatName) != 0 {
 		localCluster.cluster.AltStatName = telemetry.BuildStatPrefix(cb.req.Push.Mesh.InboundClusterStatName,
@@ -478,11 +488,34 @@ func (cb *ClusterBuilder) buildInboundClusterForPortOrUDS(clusterPort int, bind 
 		// config which will be skipped.
 		localCluster.cluster.UpstreamBindConfig = &core.BindConfig{
 			SourceAddress: &core.SocketAddress{
-				Address: cb.passThroughBindIP,
+				Address: cb.passThroughBindIPs[0],
 				PortSpecifier: &core.SocketAddress_PortValue{
 					PortValue: uint32(0),
 				},
 			},
+		}
+		// There is an usage doc here:
+		// https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/core/v3/address.proto#config-core-v3-bindconfig
+		// to support the Dual Stack via Envoy bindconfig, and belows are related issue and PR in Envoy:
+		// https://github.com/envoyproxy/envoy/issues/9811
+		// https://github.com/envoyproxy/envoy/pull/22639
+		// the extra source address for UpstreamBindConfig shoulde be added if dual stack is enabled and there are
+		// more than 1 IP for proxy
+		if features.EnableDualStack && len(cb.passThroughBindIPs) > 1 {
+			// add extra source addresses to cluster builder
+			var extraSrcAddrs []*core.ExtraSourceAddress
+			for _, extraBdIP := range cb.passThroughBindIPs[1:] {
+				extraSrcAddr := &core.ExtraSourceAddress{
+					Address: &core.SocketAddress{
+						Address: extraBdIP,
+						PortSpecifier: &core.SocketAddress_PortValue{
+							PortValue: uint32(0),
+						},
+					},
+				}
+				extraSrcAddrs = append(extraSrcAddrs, extraSrcAddr)
+			}
+			localCluster.cluster.UpstreamBindConfig.ExtraSourceAddresses = extraSrcAddrs
 		}
 	}
 	return localCluster
@@ -530,6 +563,7 @@ func (cb *ClusterBuilder) buildLocalityLbEndpoints(proxyView model.ProxyView, se
 			LoadBalancingWeight: &wrappers.UInt32Value{
 				Value: instance.Endpoint.GetLoadBalancingWeight(),
 			},
+			Metadata: &core.Metadata{},
 		}
 
 		labels := instance.Endpoint.Labels
@@ -548,8 +582,8 @@ func (cb *ClusterBuilder) buildLocalityLbEndpoints(proxyView model.ProxyView, se
 			}
 		}
 
-		ep.Metadata = util.BuildLbEndpointMetadata(instance.Endpoint.Network, instance.Endpoint.TLSMode, instance.Endpoint.WorkloadName,
-			ns, instance.Endpoint.Locality.ClusterID, labels)
+		util.BuildLbEndpointMetadata(instance.Endpoint.Network, instance.Endpoint.TLSMode, instance.Endpoint.WorkloadName,
+			ns, instance.Endpoint.Locality.ClusterID, labels, ep.Metadata)
 
 		locality := instance.Endpoint.Locality.Label
 		lbEndpoints[locality] = append(lbEndpoints[locality], ep)
@@ -651,7 +685,7 @@ func (cb *ClusterBuilder) buildDefaultPassthroughCluster() *cluster.Cluster {
 		ConnectTimeout:       cb.req.Push.Mesh.ConnectTimeout,
 		LbPolicy:             cluster.Cluster_CLUSTER_PROVIDED,
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
-			v3.HttpProtocolOptionsType: passthroughHttpProtocolOptions,
+			v3.HttpProtocolOptionsType: PassthroughHttpProtocolOptions,
 		},
 	}
 	cb.applyConnectionPool(cb.req.Push.Mesh, NewMutableCluster(cluster), &networking.ConnectionPoolSettings{})
@@ -666,7 +700,7 @@ func (cb *ClusterBuilder) applyH2Upgrade(opts buildClusterOpts, connectionPool *
 	}
 }
 
-// shouldH2Upgrade function returns true if the cluster  should be upgraded to http2.
+// shouldH2Upgrade function returns true if the cluster should be upgraded to http2.
 func (cb *ClusterBuilder) shouldH2Upgrade(clusterName string, direction model.TrafficDirection, port *model.Port, mesh *meshconfig.MeshConfig,
 	connectionPool *networking.ConnectionPoolSettings,
 ) bool {

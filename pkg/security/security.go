@@ -95,8 +95,7 @@ const (
 	WorkloadKeyCertResourceName = "default"
 
 	// GCE is Credential fetcher type of Google plugin
-	GCE          = "GoogleComputeEngine"
-	TokenRequest = "TokenRequest"
+	GCE = "GoogleComputeEngine"
 
 	// JWT is a Credential fetcher type that reads from a JWT token file
 	JWT = "JWT"
@@ -140,7 +139,11 @@ const (
 	K8sTokenPrefix = "Istio "
 
 	// CertSigner info
-	CertSigner           = "CertSigner"
+	CertSigner = "CertSigner"
+
+	// ImpersonatedIdentity declares the identity we are requesting a certificate on behalf of.
+	// This is constrained to only allow identities in CATrustedNodeAccounts, and only to impersonate identities
+	// on their node.
 	ImpersonatedIdentity = "ImpersonatedIdentity"
 )
 
@@ -302,7 +305,7 @@ type StsRequestParameters struct {
 // interface to get back a signed certificate. There is no guarantee that the SAN
 // in the request will be returned - server may replace it.
 type Client interface {
-	CSRSign(ctx context.Context, csrPEM []byte, certValidTTLInSec int64) ([]string, error)
+	CSRSign(csrPEM []byte, certValidTTLInSec int64) ([]string, error)
 	Close()
 	// Retrieve CA root certs If CA publishes API endpoint for this
 	GetRootCertBundle() ([]string, error)
@@ -343,7 +346,7 @@ type SecretItem struct {
 
 type CredFetcher interface {
 	// GetPlatformCredential fetches workload credential provided by the platform.
-	GetPlatformCredential(ctx context.Context) (string, error)
+	GetPlatformCredential() (string, error)
 
 	// GetIdentityProvider returns the name of the IdentityProvider that can authenticate the workload credential.
 	GetIdentityProvider() string

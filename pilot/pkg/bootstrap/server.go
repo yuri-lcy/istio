@@ -39,7 +39,6 @@ import (
 	"k8s.io/client-go/rest"
 
 	"istio.io/api/security/v1beta1"
-	ambientcontroller "istio.io/istio/pilot/pkg/ambient/controller"
 	kubecredentials "istio.io/istio/pilot/pkg/credentials/kube"
 	"istio.io/istio/pilot/pkg/features"
 	istiogrpc "istio.io/istio/pilot/pkg/grpc"
@@ -54,7 +53,6 @@ import (
 	"istio.io/istio/pilot/pkg/status/distribution"
 	tb "istio.io/istio/pilot/pkg/trustbundle"
 	"istio.io/istio/pilot/pkg/xds"
-	v3 "istio.io/istio/pilot/pkg/xds/v3"
 	"istio.io/istio/pkg/cluster"
 	"istio.io/istio/pkg/config"
 	"istio.io/istio/pkg/config/constants"
@@ -69,6 +67,7 @@ import (
 	"istio.io/istio/pkg/kube/multicluster"
 	"istio.io/istio/pkg/security"
 	"istio.io/istio/pkg/spiffe"
+	"istio.io/istio/pkg/util/sets"
 	"istio.io/istio/security/pkg/k8s/chiron"
 	"istio.io/istio/security/pkg/pki/ca"
 	"istio.io/istio/security/pkg/pki/ra"
@@ -171,10 +170,50 @@ type Server struct {
 	// in AddStartFunc
 	internalStop chan struct{}
 
+	webhookInfo *webhookInfo
+
 	statusReporter *distribution.Reporter
 	statusManager  *status.Manager
 	// RWConfigStore is the configstore which allows updates, particularly for status.
 	RWConfigStore model.ConfigStoreController
+
+	// Can be used to wait for CRDs
+	// TODO: this is currently looking at the config cluster only, should be on a per-cluster basis
+	waitForCRD func(k config.GroupVersionKind, stop <-chan struct{}) bool
+}
+
+type webhookInfo struct {
+	mu sync.RWMutex
+	wh *inject.Webhook
+}
+
+func (w *webhookInfo) GetTemplates() map[string]string {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.wh != nil {
+		return w.wh.Config.RawTemplates
+	}
+	return map[string]string{}
+}
+
+func (w *webhookInfo) getWebhookConfig() inject.WebhookConfig {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.wh != nil {
+		return w.wh.GetConfig()
+	}
+	return inject.WebhookConfig{}
+}
+
+func (w *webhookInfo) addHandler(fn func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.wh != nil {
+		w.wh.MultiCast.AddHandler(func(c *inject.Config, s string) error {
+			fn()
+			return nil
+		})
+	}
 }
 
 // NewServer creates a new Server instance based on the provided arguments.
@@ -200,21 +239,13 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 		shutdownDuration:        args.ShutdownDuration,
 		internalStop:            make(chan struct{}),
 		istiodCertBundleWatcher: keycertbundle.NewWatcher(),
+		webhookInfo:             &webhookInfo{},
 	}
-
 	// Used for readiness, monitoring and debug handlers.
 	var (
 		whMu sync.RWMutex
 		wh   *inject.Webhook
 	)
-	whc := func() map[string]string {
-		whMu.RLock()
-		defer whMu.RUnlock()
-		if wh != nil {
-			return wh.Config.RawTemplates
-		}
-		return map[string]string{}
-	}
 
 	// Apply custom initialization functions.
 	for _, fn := range initFuncs {
@@ -222,7 +253,7 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 	}
 	// Initialize workload Trust Bundle before XDS Server
 	e.TrustBundle = s.workloadTrustBundle
-	s.XDSServer = xds.NewDiscoveryServer(e, args.PodName, args.RegistryOptions.KubeOptions.ClusterAliases)
+	s.XDSServer = xds.NewDiscoveryServer(e, args.PodName, s.clusterID, args.RegistryOptions.KubeOptions.ClusterAliases)
 
 	prometheus.EnableHandlingTimeHistogram()
 
@@ -231,7 +262,7 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 		return s.XDSServer.IsServerReady(), nil
 	})
 	s.initServers(args)
-	if err := s.initIstiodAdminServer(args, whc); err != nil {
+	if err := s.initIstiodAdminServer(args, s.webhookInfo.GetTemplates); err != nil {
 		return nil, fmt.Errorf("error initializing debug server: %v", err)
 	}
 	if err := s.serveHTTP(); err != nil {
@@ -285,8 +316,6 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 		}
 		return inject.WebhookConfig{}
 	}
-	s.initAmbient(args, getWebhookConfig)
-
 	s.initAcmg(args, getWebhookConfig)
 
 	s.XDSServer.InitGenerators(e, args.Namespace, s.internalDebugMux)
@@ -315,12 +344,13 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 	// common https server for webhooks (e.g. injection, validation)
 	if s.kubeClient != nil {
 		s.initSecureWebhookServer(args)
-		whMu.Lock()
-		wh, err = s.initSidecarInjector(args)
-		whMu.Unlock()
+		wh, err := s.initSidecarInjector(args)
 		if err != nil {
 			return nil, fmt.Errorf("error initializing sidecar injector: %v", err)
 		}
+		s.webhookInfo.mu.Lock()
+		s.webhookInfo.wh = wh
+		s.webhookInfo.mu.Unlock()
 		if err := s.initConfigValidation(args); err != nil {
 			return nil, fmt.Errorf("error initializing config validator: %v", err)
 		}
@@ -330,8 +360,6 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 	s.initRegistryEventHandlers()
 
 	s.initDiscoveryService()
-
-	s.initSDSServer()
 
 	// Notice that the order of authenticators matters, since at runtime
 	// authenticators are activated sequentially and the first successful attempt
@@ -506,26 +534,18 @@ func (s *Server) initSDSServer() {
 		creds := kubecredentials.NewMulticluster(s.clusterID)
 		creds.AddSecretHandler(func(name string, namespace string) {
 			s.XDSServer.ConfigUpdate(&model.PushRequest{
-				Full: false,
-				ConfigsUpdated: map[model.ConfigKey]struct{}{
-					{
-						Kind:      kind.Secret,
-						Name:      name,
-						Namespace: namespace,
-					}: {},
-				},
+				Full:           false,
+				ConfigsUpdated: sets.New(model.ConfigKey{Kind: kind.Secret, Name: name, Namespace: namespace}),
+
 				Reason: []model.TriggerReason{model.SecretTrigger},
 			})
 		})
-		s.XDSServer.Generators[v3.SecretType] = xds.NewSecretGen(creds, s.XDSServer.Cache, s.clusterID, s.environment.Mesh())
 		s.multiclusterController.AddHandler(creds)
-		if ecdsGen, found := s.XDSServer.Generators[v3.ExtensionConfigurationType]; found {
-			ecdsGen.(*xds.EcdsGenerator).SetCredController(creds)
-		}
+		s.environment.CredentialsController = creds
 	}
 }
 
-// initKubeClient creates the k8s client if running in an k8s environment.
+// initKubeClient creates the k8s client if running in a k8s environment.
 // This is determined by the presence of a kube registry, which
 // uses in-context k8s, or a config source of type k8s.
 func (s *Server) initKubeClient(args *PilotArgs) error {
@@ -864,17 +884,19 @@ func (s *Server) cachesSynced() bool {
 func (s *Server) initRegistryEventHandlers() {
 	log.Info("initializing registry event handlers")
 	// Flush cached discovery responses whenever services configuration change.
-	serviceHandler := func(svc *model.Service, _ model.Event) {
-		pushReq := &model.PushRequest{
-			Full: true,
-			ConfigsUpdated: map[model.ConfigKey]struct{}{{
-				Kind:      kind.ServiceEntry,
-				Name:      string(svc.Hostname),
-				Namespace: svc.Attributes.Namespace,
-			}: {}},
-			Reason: []model.TriggerReason{model.ServiceUpdate},
+	serviceHandler := func(prev, curr *model.Service, event model.Event) {
+		needsPush := true
+		if event == model.EventUpdate {
+			needsPush = serviceUpdateNeedsPush(prev, curr)
 		}
-		s.XDSServer.ConfigUpdate(pushReq)
+		if needsPush {
+			pushReq := &model.PushRequest{
+				Full:           true,
+				ConfigsUpdated: sets.New(model.ConfigKey{Kind: kind.ServiceEntry, Name: string(curr.Hostname), Namespace: curr.Attributes.Namespace}),
+				Reason:         []model.TriggerReason{model.ServiceUpdate},
+			}
+			s.XDSServer.ConfigUpdate(pushReq)
+		}
 	}
 	s.ServiceController().AppendServiceHandler(serviceHandler)
 
@@ -894,13 +916,9 @@ func (s *Server) initRegistryEventHandlers() {
 				return
 			}
 			pushReq := &model.PushRequest{
-				Full: true,
-				ConfigsUpdated: map[model.ConfigKey]struct{}{{
-					Kind:      kind.FromGvk(curr.GroupVersionKind),
-					Name:      curr.Name,
-					Namespace: curr.Namespace,
-				}: {}},
-				Reason: []model.TriggerReason{model.ConfigUpdate},
+				Full:           true,
+				ConfigsUpdated: sets.New(model.ConfigKey{Kind: kind.FromGvk(curr.GroupVersionKind), Name: curr.Name, Namespace: curr.Namespace}),
+				Reason:         []model.TriggerReason{model.ConfigUpdate},
 			}
 			s.XDSServer.ConfigUpdate(pushReq)
 		}
@@ -930,6 +948,19 @@ func (s *Server) initRegistryEventHandlers() {
 				s.XDSServer.ConfigUpdate(&model.PushRequest{
 					Full:   true,
 					Reason: []model.TriggerReason{model.NamespaceUpdate},
+				})
+			})
+			s.environment.GatewayAPIController.RegisterEventHandler(gvk.Secret, func(_ config.Config, gw config.Config, _ model.Event) {
+				s.XDSServer.ConfigUpdate(&model.PushRequest{
+					Full: true,
+					ConfigsUpdated: map[model.ConfigKey]struct{}{
+						{
+							Kind:      kind.KubernetesGateway,
+							Name:      gw.Name,
+							Namespace: gw.Namespace,
+						}: {},
+					},
+					Reason: []model.TriggerReason{model.SecretTrigger},
 				})
 			})
 		}
@@ -1026,15 +1057,16 @@ func getDNSNames(args *PilotArgs, host string) []string {
 
 // createPeerCertVerifier creates a SPIFFE certificate verifier with the current istiod configuration.
 func (s *Server) createPeerCertVerifier(tlsOptions TLSOptions) (*spiffe.PeerCertVerifier, error) {
-	if tlsOptions.CaCertFile == "" && s.CA == nil && features.SpiffeBundleEndpoints == "" && !s.isCADisabled() {
+	customTLSCertsExists, _, _, caCertPath := hasCustomTLSCerts(tlsOptions)
+	if !customTLSCertsExists && s.CA == nil && features.SpiffeBundleEndpoints == "" && !s.isCADisabled() {
 		// Running locally without configured certs - no TLS mode
 		return nil, nil
 	}
 	peerCertVerifier := spiffe.NewPeerCertVerifier()
 	var rootCertBytes []byte
 	var err error
-	if tlsOptions.CaCertFile != "" {
-		if rootCertBytes, err = os.ReadFile(tlsOptions.CaCertFile); err != nil {
+	if caCertPath != "" {
+		if rootCertBytes, err = os.ReadFile(caCertPath); err != nil {
 			return nil, err
 		}
 	} else {
@@ -1126,6 +1158,9 @@ func (s *Server) getIstiodCertificate(*tls.ClientHelloInfo) (*tls.Certificate, e
 func (s *Server) initControllers(args *PilotArgs) error {
 	log.Info("initializing controllers")
 	s.initMulticluster(args)
+
+	s.initSDSServer()
+
 	// Certificate controller is created before MCP controller in case MCP server pod
 	// waits to mount a certificate to be provisioned by the certificate controller.
 	if err := s.initCertController(args); err != nil {
@@ -1149,14 +1184,6 @@ func (s *Server) initAcmg(args *PilotArgs, webhookConfig func() inject.WebhookCo
 	s.environment.AcmgCache = acmgController
 	if s.multiclusterController != nil {
 		s.multiclusterController.AddHandler(acmgController)
-	}
-}
-
-func (s *Server) initAmbient(args *PilotArgs, webhookConfig func() inject.WebhookConfig) {
-	ambientController := ambientcontroller.NewAggregate(args.Namespace, s.clusterID, args.PodName, args.Revision, webhookConfig, s.XDSServer, false)
-	s.environment.Cache = ambientController
-	if s.multiclusterController != nil {
-		s.multiclusterController.AddHandler(ambientController)
 	}
 }
 
@@ -1364,4 +1391,14 @@ func (s *Server) serveHTTP() error {
 	}()
 	s.httpAddr = httpListener.Addr().String()
 	return nil
+}
+
+func serviceUpdateNeedsPush(prev, curr *model.Service) bool {
+	if !features.EnableOptimizedServicePush {
+		return true
+	}
+	if prev == nil {
+		return true
+	}
+	return !prev.Equals(curr)
 }

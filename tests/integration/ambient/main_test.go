@@ -25,6 +25,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/test/framework"
 	"istio.io/istio/pkg/test/framework/components/ambient"
 	"istio.io/istio/pkg/test/framework/components/echo"
@@ -35,7 +36,6 @@ import (
 	"istio.io/istio/pkg/test/framework/components/namespace"
 	"istio.io/istio/pkg/test/framework/components/prometheus"
 	"istio.io/istio/pkg/test/framework/resource"
-	"istio.io/istio/pkg/test/framework/resource/config/apply"
 	"istio.io/istio/pkg/test/scopes"
 )
 
@@ -71,8 +71,6 @@ var ControlPlaneValues = `
 profile: ambient
 values:
   meshConfig:
-    ambientMesh:
-      mode: "DEFAULT"
     defaultConfig:
       proxyMetadata:
         ISTIO_META_DNS_CAPTURE: "false"
@@ -121,7 +119,7 @@ func SetupApps(t resource.Context, i istio.Instance, apps *EchoDeployments) erro
 		Prefix: "echo",
 		Inject: false,
 		Labels: map[string]string{
-			"istio.io/dataplane-mode": "ambient",
+			constants.DataplaneMode: "ambient",
 		},
 	})
 	if err != nil {
@@ -175,16 +173,10 @@ func SetupApps(t resource.Context, i istio.Instance, apps *EchoDeployments) erro
 				{
 					Replicas: 1,
 					Version:  "v1",
-					Labels: map[string]string{
-						"ambient-type": "workload",
-					},
 				},
 				{
 					Replicas: 1,
 					Version:  "v2",
-					Labels: map[string]string{
-						"ambient-type": "workload",
-					},
 				},
 			},
 		}).
@@ -195,33 +187,17 @@ func SetupApps(t resource.Context, i istio.Instance, apps *EchoDeployments) erro
 			ServiceAccount: true,
 			Subsets: []echo.SubsetConfig{
 				{
-					Replicas: 1,
-					Version:  "v1",
-					Labels: map[string]string{
-						"ambient-type": "none",
-					},
+					Replicas:    1,
+					Version:     "v1",
+					Annotations: echo.NewAnnotations().Set(echo.AmbientType, constants.AmbientRedirectionDisabled),
 				},
 				{
-					Replicas: 1,
-					Version:  "v2",
-					Labels: map[string]string{
-						"ambient-type": "none",
-					},
+					Replicas:    1,
+					Version:     "v2",
+					Annotations: echo.NewAnnotations().Set(echo.AmbientType, constants.AmbientRedirectionDisabled),
 				},
 			},
 		})
-
-	// TODO: detect from UseWaypointProxy in echo.Config
-	if err := t.ConfigIstio().YAML(apps.Namespace.Name(), `apiVersion: gateway.networking.k8s.io/v1alpha2
-kind: Gateway
-metadata:
-  name: waypoint
-  annotations:
-    istio.io/service-account: waypoint
-spec:
-  gatewayClassName: istio-mesh`).Apply(apply.NoCleanup); err != nil {
-		return err
-	}
 
 	_, whErr := t.Clusters().Default().
 		Kube().AdmissionregistrationV1().MutatingWebhookConfigurations().
@@ -231,7 +207,7 @@ spec:
 	}
 	// Only setup sidecar tests if webhook is installed
 	if whErr == nil {
-		// TODO(https://github.com/solo-io/istio-sidecarless/issues/154) support sidecars that are captured
+		// TODO(https://github.com/istio/istio/issues/43244) support sidecars that are captured
 		//builder = builder.WithConfig(echo.Config{
 		//	Service:   SidecarWaypoint,
 		//	Namespace: apps.Namespace,
@@ -285,18 +261,18 @@ spec:
 			ServiceAccount: true,
 			Subsets: []echo.SubsetConfig{
 				{
-					Replicas: 1,
-					Version:  "v1",
+					Replicas:    1,
+					Version:     "v1",
+					Annotations: echo.NewAnnotations().Set(echo.AmbientType, constants.AmbientRedirectionDisabled),
 					Labels: map[string]string{
-						"ambient-type":            "none",
 						"sidecar.istio.io/inject": "true",
 					},
 				},
 				{
-					Replicas: 1,
-					Version:  "v2",
+					Replicas:    1,
+					Version:     "v2",
+					Annotations: echo.NewAnnotations().Set(echo.AmbientType, constants.AmbientRedirectionDisabled),
 					Labels: map[string]string{
-						"ambient-type":            "none",
 						"sidecar.istio.io/inject": "true",
 					},
 				},

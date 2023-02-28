@@ -24,14 +24,12 @@ import (
 	"istio.io/pkg/log"
 )
 
-type secretHandler func(name string, namespace string)
-
 // Multicluster structure holds the remote kube Controllers and multicluster specific attributes.
 type Multicluster struct {
 	remoteKubeControllers map[cluster.ID]*CredentialsController
 	m                     sync.Mutex // protects remoteKubeControllers
 	configCluster         cluster.ID
-	secretHandlers        []secretHandler
+	secretHandlers        []func(name string, namespace string)
 }
 
 var _ credentials.MulticlusterController = &Multicluster{}
@@ -100,7 +98,7 @@ func (m *Multicluster) ForCluster(clusterID cluster.ID) (credentials.Controller,
 	return agg, nil
 }
 
-func (m *Multicluster) AddSecretHandler(h secretHandler) {
+func (m *Multicluster) AddSecretHandler(h func(name string, namespace string)) {
 	m.secretHandlers = append(m.secretHandlers, h)
 	m.m.Lock()
 	defer m.m.Unlock()
@@ -118,20 +116,20 @@ type AggregateController struct {
 
 var _ credentials.Controller = &AggregateController{}
 
-func (a *AggregateController) GetKeyAndCert(name, namespace string) (key []byte, cert []byte, err error) {
+func (a *AggregateController) GetKeyCertAndStaple(name, namespace string) (key []byte, cert []byte, staple []byte, err error) {
 	// Search through all clusters, find first non-empty result
 	var firstError error
 	for _, c := range a.controllers {
-		k, c, err := c.GetKeyAndCert(name, namespace)
+		k, c, s, err := c.GetKeyCertAndStaple(name, namespace)
 		if err != nil {
 			if firstError == nil {
 				firstError = err
 			}
 		} else {
-			return k, c, nil
+			return k, c, s, nil
 		}
 	}
-	return nil, nil, firstError
+	return nil, nil, nil, firstError
 }
 
 func (a *AggregateController) GetCaCert(name, namespace string) (cert []byte, err error) {

@@ -18,8 +18,13 @@ import (
 	"fmt"
 	"io"
 
+	v1 "k8s.io/api/core/v1"
+
+	"istio.io/istio/pkg/config/constants"
 	istioKube "istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/test/framework"
+	"istio.io/istio/pkg/test/framework/components/crd"
+	"istio.io/istio/pkg/test/framework/components/istioctl"
 	"istio.io/istio/pkg/test/framework/components/namespace"
 	"istio.io/istio/pkg/test/framework/resource"
 	testKube "istio.io/istio/pkg/test/kube"
@@ -34,10 +39,15 @@ type kubeComponent struct {
 	ns       namespace.Instance
 	inbound  istioKube.PortForwarder
 	outbound istioKube.PortForwarder
+	pod      v1.Pod
 }
 
 func (k kubeComponent) Namespace() namespace.Instance {
 	return k.ns
+}
+
+func (k kubeComponent) PodIP() string {
+	return k.pod.Status.PodIP
 }
 
 func (k kubeComponent) Inbound() string {
@@ -53,8 +63,12 @@ func (k kubeComponent) ID() resource.ID {
 }
 
 func (k kubeComponent) Close() error {
-	k.inbound.Close()
-	k.outbound.Close()
+	if k.inbound != nil {
+		k.inbound.Close()
+	}
+	if k.outbound != nil {
+		k.outbound.Close()
+	}
 	return nil
 }
 
@@ -63,6 +77,7 @@ type WaypointProxy interface {
 	Namespace() namespace.Instance
 	Inbound() string
 	Outbound() string
+	PodIP() string
 }
 
 // NewWaypointProxy creates a new WaypointProxy.
@@ -72,9 +87,31 @@ func NewWaypointProxy(ctx resource.Context, ns namespace.Instance, sa string) (W
 		sa: sa,
 	}
 	server.id = ctx.TrackResource(server)
+	if err := crd.DeployGatewayAPI(ctx); err != nil {
+		return nil, err
+	}
+
+	ik, err := istioctl.New(ctx, istioctl.Config{})
+	if err != nil {
+		return nil, err
+	}
+	// TODO: detect from UseWaypointProxy in echo.Config
+	_, _, err = ik.Invoke([]string{
+		"x",
+		"waypoint",
+		"apply",
+		"--namespace",
+		ns.Name(),
+		"--service-account",
+		sa,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	cls := ctx.Clusters().Kube().Default()
 	// Find the Prometheus pod and service, and start forwarding a local port.
-	fetchFn := testKube.NewSinglePodFetch(cls, ns.Name(), fmt.Sprintf("ambient-proxy=%s-waypoint-proxy", sa))
+	fetchFn := testKube.NewSinglePodFetch(cls, ns.Name(), fmt.Sprintf("%s=%s", constants.GatewayNameLabel, sa))
 	pods, err := testKube.WaitUntilPodsAreReady(fetchFn)
 	if err != nil {
 		return nil, err
@@ -98,6 +135,7 @@ func NewWaypointProxy(ctx resource.Context, ns namespace.Instance, sa string) (W
 	}
 	server.inbound = inbound
 	server.outbound = outbound
+	server.pod = pod
 	return server, nil
 }
 

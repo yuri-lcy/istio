@@ -54,6 +54,16 @@ var (
 		Minor:      "20",
 		GitVersion: "v1.20.2",
 	}
+	version1_22 = &version.Info{
+		Major:      "1",
+		Minor:      "22",
+		GitVersion: "v1.22",
+	}
+	version1_23 = &version.Info{
+		Major:      "1",
+		Minor:      "23",
+		GitVersion: "v1.23",
+	}
 	version1_19RC = &version.Info{
 		Major:      "1",
 		Minor:      "19",
@@ -115,6 +125,12 @@ func TestExtractKubernetesVersion(t *testing.T) {
 		{
 			version:  version1_20,
 			expected: 20,
+			errMsg:   nil,
+			isValid:  true,
+		},
+		{
+			version:  version1_22,
+			expected: 22,
 			errMsg:   nil,
 			isValid:  true,
 		},
@@ -188,6 +204,16 @@ func TestIsK8VersionSupported(t *testing.T) {
 		},
 		{
 			version: version1_20,
+			logMsg:  fmt.Sprintf(UnSupportedK8SVersionLogMsg, version1_20.GitVersion, pkgVersion.Info.Version, MinK8SVersion),
+			isValid: false,
+		},
+		{
+			version: version1_22,
+			logMsg:  fmt.Sprintf(UnSupportedK8SVersionLogMsg, version1_22.GitVersion, pkgVersion.Info.Version, MinK8SVersion),
+			isValid: false,
+		},
+		{
+			version: version1_23,
 			isValid: true,
 		},
 	}

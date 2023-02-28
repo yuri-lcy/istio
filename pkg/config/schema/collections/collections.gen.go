@@ -9,6 +9,8 @@ package collections
 import (
 	"reflect"
 
+	k8sioapinetworkingv1 "k8s.io/api/networking/v1"
+
 	istioioapiextensionsv1alpha1 "istio.io/api/extensions/v1alpha1"
 	istioioapimeshv1alpha1 "istio.io/api/mesh/v1alpha1"
 	istioioapimetav1alpha1 "istio.io/api/meta/v1alpha1"
@@ -22,7 +24,6 @@ import (
 	k8sioapiadmissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	k8sioapiappsv1 "k8s.io/api/apps/v1"
 	k8sioapicorev1 "k8s.io/api/core/v1"
-	k8sioapiextensionsv1beta1 "k8s.io/api/extensions/v1beta1"
 	k8sioapiextensionsapiserverpkgapisapiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	sigsk8siogatewayapiapisv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 )
@@ -114,10 +115,7 @@ var (
 			Kind:    "EnvoyFilter",
 			Plural:  "envoyfilters",
 			Version: "v1alpha3",
-			VersionAliases: []string{
-				"v1beta1",
-			},
-			Proto: "istio.networking.v1alpha3.EnvoyFilter", StatusProto: "istio.meta.v1alpha1.IstioStatus",
+			Proto:   "istio.networking.v1alpha3.EnvoyFilter", StatusProto: "istio.meta.v1alpha1.IstioStatus",
 			ReflectType: reflect.TypeOf(&istioioapinetworkingv1alpha3.EnvoyFilter{}).Elem(), StatusType: reflect.TypeOf(&istioioapimetav1alpha1.IstioStatus{}).Elem(),
 			ProtoPackage: "istio.io/api/networking/v1alpha3", StatusPackage: "istio.io/api/meta/v1alpha1",
 			ClusterScoped: false,
@@ -279,7 +277,10 @@ var (
 			Kind:    "AuthorizationPolicy",
 			Plural:  "authorizationpolicies",
 			Version: "v1beta1",
-			Proto:   "istio.security.v1beta1.AuthorizationPolicy", StatusProto: "istio.meta.v1alpha1.IstioStatus",
+			VersionAliases: []string{
+				"v1",
+			},
+			Proto: "istio.security.v1beta1.AuthorizationPolicy", StatusProto: "istio.meta.v1alpha1.IstioStatus",
 			ReflectType: reflect.TypeOf(&istioioapisecurityv1beta1.AuthorizationPolicy{}).Elem(), StatusType: reflect.TypeOf(&istioioapimetav1alpha1.IstioStatus{}).Elem(),
 			ProtoPackage: "istio.io/api/security/v1beta1", StatusPackage: "istio.io/api/meta/v1alpha1",
 			ClusterScoped: false,
@@ -315,7 +316,10 @@ var (
 			Kind:    "RequestAuthentication",
 			Plural:  "requestauthentications",
 			Version: "v1beta1",
-			Proto:   "istio.security.v1beta1.RequestAuthentication", StatusProto: "istio.meta.v1alpha1.IstioStatus",
+			VersionAliases: []string{
+				"v1",
+			},
+			Proto: "istio.security.v1beta1.RequestAuthentication", StatusProto: "istio.meta.v1alpha1.IstioStatus",
 			ReflectType: reflect.TypeOf(&istioioapisecurityv1beta1.RequestAuthentication{}).Elem(), StatusType: reflect.TypeOf(&istioioapimetav1alpha1.IstioStatus{}).Elem(),
 			ProtoPackage: "istio.io/api/security/v1beta1", StatusPackage: "istio.io/api/meta/v1alpha1",
 			ClusterScoped: false,
@@ -497,6 +501,24 @@ var (
 		}.MustBuild(),
 	}.MustBuild()
 
+	// K8SCoreV1Serviceaccounts describes the collection
+	// k8s/core/v1/serviceaccounts
+	K8SCoreV1Serviceaccounts = collection.Builder{
+		Name:         "k8s/core/v1/serviceaccounts",
+		VariableName: "K8SCoreV1Serviceaccounts",
+		Resource: resource.Builder{
+			Group:         "",
+			Kind:          "ServiceAccount",
+			Plural:        "serviceaccounts",
+			Version:       "v1",
+			Proto:         "k8s.io.api.core.v1.ServiceAccount",
+			ReflectType:   reflect.TypeOf(&k8sioapicorev1.ServiceAccount{}).Elem(),
+			ProtoPackage:  "k8s.io/api/core/v1",
+			ClusterScoped: false,
+			ValidateProto: validation.EmptyValidate,
+		}.MustBuild(),
+	}.MustBuild()
+
 	// K8SCoreV1Services describes the collection k8s/core/v1/services
 	K8SCoreV1Services = collection.Builder{
 		Name:         "k8s/core/v1/services",
@@ -509,24 +531,6 @@ var (
 			Proto:         "k8s.io.api.core.v1.ServiceSpec",
 			ReflectType:   reflect.TypeOf(&k8sioapicorev1.ServiceSpec{}).Elem(),
 			ProtoPackage:  "k8s.io/api/core/v1",
-			ClusterScoped: false,
-			ValidateProto: validation.EmptyValidate,
-		}.MustBuild(),
-	}.MustBuild()
-
-	// K8SExtensionsV1Beta1Ingresses describes the collection
-	// k8s/extensions/v1beta1/ingresses
-	K8SExtensionsV1Beta1Ingresses = collection.Builder{
-		Name:         "k8s/extensions/v1beta1/ingresses",
-		VariableName: "K8SExtensionsV1Beta1Ingresses",
-		Resource: resource.Builder{
-			Group:   "extensions",
-			Kind:    "Ingress",
-			Plural:  "ingresses",
-			Version: "v1beta1",
-			Proto:   "k8s.io.api.extensions.v1beta1.IngressSpec", StatusProto: "k8s.io.gateway_api.api.v1alpha1.IngressStatus",
-			ReflectType: reflect.TypeOf(&k8sioapiextensionsv1beta1.IngressSpec{}).Elem(), StatusType: reflect.TypeOf(&k8sioapiextensionsv1beta1.IngressStatus{}).Elem(),
-			ProtoPackage: "k8s.io/api/extensions/v1beta1", StatusPackage: "k8s.io/api/extensions/v1beta1",
 			ClusterScoped: false,
 			ValidateProto: validation.EmptyValidate,
 		}.MustBuild(),
@@ -564,7 +568,7 @@ var (
 			ReflectType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.TCPRouteSpec{}).Elem(), StatusType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.TCPRouteStatus{}).Elem(),
 			ProtoPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2", StatusPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2",
 			ClusterScoped: false,
-			ValidateProto: validation.EmptyValidate,
+			ValidateProto: validation.ValidateTCPRoute,
 		}.MustBuild(),
 	}.MustBuild()
 
@@ -582,7 +586,7 @@ var (
 			ReflectType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.TLSRouteSpec{}).Elem(), StatusType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.TLSRouteStatus{}).Elem(),
 			ProtoPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2", StatusPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2",
 			ClusterScoped: false,
-			ValidateProto: validation.EmptyValidate,
+			ValidateProto: validation.ValidateTLSRoute,
 		}.MustBuild(),
 	}.MustBuild()
 
@@ -663,7 +667,7 @@ var (
 			ReflectType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.HTTPRouteSpec{}).Elem(), StatusType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.HTTPRouteStatus{}).Elem(),
 			ProtoPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2", StatusPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2",
 			ClusterScoped: false,
-			ValidateProto: validation.EmptyValidate,
+			ValidateProto: validation.ValidateKubernetesGateway,
 		}.MustBuild(),
 	}.MustBuild()
 
@@ -699,6 +703,24 @@ var (
 			ReflectType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.GatewaySpec{}).Elem(), StatusType: reflect.TypeOf(&sigsk8siogatewayapiapisv1alpha2.GatewayStatus{}).Elem(),
 			ProtoPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2", StatusPackage: "sigs.k8s.io/gateway-api/apis/v1alpha2",
 			ClusterScoped: false,
+			ValidateProto: validation.ValidateHTTPRoute,
+		}.MustBuild(),
+	}.MustBuild()
+
+	// K8SNetworkingV1Ingresses describes the collection
+	// k8s/networking/v1/ingresses
+	K8SNetworkingV1Ingresses = collection.Builder{
+		Name:         "k8s/networking/v1/ingresses",
+		VariableName: "K8SNetworkingV1Ingresses",
+		Resource: resource.Builder{
+			Group:   "networking.k8s.io",
+			Kind:    "Ingress",
+			Plural:  "ingresses",
+			Version: "v1",
+			Proto:   "k8s.io.api.networking.v1.IngressSpec", StatusProto: "k8s.io.api.networking.v1.IngressStatus",
+			ReflectType: reflect.TypeOf(&k8sioapinetworkingv1.IngressSpec{}).Elem(), StatusType: reflect.TypeOf(&k8sioapinetworkingv1.IngressStatus{}).Elem(),
+			ProtoPackage: "k8s.io/api/networking/v1", StatusPackage: "k8s.io/api/networking/v1",
+			ClusterScoped: false,
 			ValidateProto: validation.EmptyValidate,
 		}.MustBuild(),
 	}.MustBuild()
@@ -730,8 +752,8 @@ var (
 		MustAdd(K8SCoreV1Nodes).
 		MustAdd(K8SCoreV1Pods).
 		MustAdd(K8SCoreV1Secrets).
+		MustAdd(K8SCoreV1Serviceaccounts).
 		MustAdd(K8SCoreV1Services).
-		MustAdd(K8SExtensionsV1Beta1Ingresses).
 		MustAdd(K8SGatewayApiV1Alpha2Referencegrants).
 		MustAdd(K8SGatewayApiV1Alpha2Tcproutes).
 		MustAdd(K8SGatewayApiV1Alpha2Tlsroutes).
@@ -774,8 +796,8 @@ var (
 		MustAdd(K8SCoreV1Nodes).
 		MustAdd(K8SCoreV1Pods).
 		MustAdd(K8SCoreV1Secrets).
+		MustAdd(K8SCoreV1Serviceaccounts).
 		MustAdd(K8SCoreV1Services).
-		MustAdd(K8SExtensionsV1Beta1Ingresses).
 		MustAdd(K8SGatewayApiV1Alpha2Referencegrants).
 		MustAdd(K8SGatewayApiV1Alpha2Tcproutes).
 		MustAdd(K8SGatewayApiV1Alpha2Tlsroutes).
@@ -799,8 +821,9 @@ var (
 		MustAdd(K8SCoreV1Nodes).
 		MustAdd(K8SCoreV1Pods).
 		MustAdd(K8SCoreV1Secrets).
+		MustAdd(K8SCoreV1Serviceaccounts).
 		MustAdd(K8SCoreV1Services).
-		MustAdd(K8SExtensionsV1Beta1Ingresses).
+		MustAdd(K8SNetworkingV1Ingresses).
 		Build()
 
 	// Pilot contains only collections used by Pilot.
@@ -823,26 +846,26 @@ var (
 
 	// PilotGatewayAPI contains only collections used by Pilot, including experimental Service Api.
 	PilotGatewayAPI = collection.NewSchemasBuilder().
-			MustAdd(IstioExtensionsV1Alpha1Wasmplugins).
-			MustAdd(IstioNetworkingV1Alpha3Destinationrules).
-			MustAdd(IstioNetworkingV1Alpha3Envoyfilters).
-			MustAdd(IstioNetworkingV1Alpha3Gateways).
-			MustAdd(IstioNetworkingV1Alpha3Serviceentries).
-			MustAdd(IstioNetworkingV1Alpha3Sidecars).
-			MustAdd(IstioNetworkingV1Alpha3Virtualservices).
-			MustAdd(IstioNetworkingV1Alpha3Workloadentries).
-			MustAdd(IstioNetworkingV1Alpha3Workloadgroups).
-			MustAdd(IstioNetworkingV1Beta1Proxyconfigs).
-			MustAdd(IstioSecurityV1Beta1Authorizationpolicies).
-			MustAdd(IstioSecurityV1Beta1Peerauthentications).
-			MustAdd(IstioSecurityV1Beta1Requestauthentications).
-			MustAdd(IstioTelemetryV1Alpha1Telemetries).
-			MustAdd(K8SGatewayApiV1Alpha2Referencegrants).
-			MustAdd(K8SGatewayApiV1Alpha2Tcproutes).
-			MustAdd(K8SGatewayApiV1Alpha2Tlsroutes).
-			MustAdd(K8SGatewayApiV1Alpha2Gatewayclasses).
-			MustAdd(K8SGatewayApiV1Alpha2Gateways).
-			MustAdd(K8SGatewayApiV1Alpha2Httproutes).
+		MustAdd(IstioExtensionsV1Alpha1Wasmplugins).
+		MustAdd(IstioNetworkingV1Alpha3Destinationrules).
+		MustAdd(IstioNetworkingV1Alpha3Envoyfilters).
+		MustAdd(IstioNetworkingV1Alpha3Gateways).
+		MustAdd(IstioNetworkingV1Alpha3Serviceentries).
+		MustAdd(IstioNetworkingV1Alpha3Sidecars).
+		MustAdd(IstioNetworkingV1Alpha3Virtualservices).
+		MustAdd(IstioNetworkingV1Alpha3Workloadentries).
+		MustAdd(IstioNetworkingV1Alpha3Workloadgroups).
+		MustAdd(IstioNetworkingV1Beta1Proxyconfigs).
+		MustAdd(IstioSecurityV1Beta1Authorizationpolicies).
+		MustAdd(IstioSecurityV1Beta1Peerauthentications).
+		MustAdd(IstioSecurityV1Beta1Requestauthentications).
+		MustAdd(IstioTelemetryV1Alpha1Telemetries).
+		MustAdd(K8SGatewayApiV1Alpha2Referencegrants).
+		MustAdd(K8SGatewayApiV1Alpha2Tcproutes).
+		MustAdd(K8SGatewayApiV1Alpha2Tlsroutes).
+		MustAdd(K8SGatewayApiV1Alpha2Gatewayclasses).
+		MustAdd(K8SGatewayApiV1Alpha2Gateways).
+		MustAdd(K8SGatewayApiV1Alpha2Httproutes).
 		//MustAdd(K8SGatewayApiV1Beta1Gatewayclasses).
 		//MustAdd(K8SGatewayApiV1Beta1Gateways).
 		//MustAdd(K8SGatewayApiV1Beta1Httproutes).
@@ -850,5 +873,5 @@ var (
 
 	// Deprecated contains only collections used by that will soon be used by nothing.
 	Deprecated = collection.NewSchemasBuilder().
-			Build()
+		Build()
 )

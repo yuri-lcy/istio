@@ -27,13 +27,11 @@ type iptablesRule struct {
 	RuleSpec []string
 }
 
-var IptablesCmd = "iptables-nft"
-
-// DetectIptablesCommand will attempt to detect whether to use iptables-legacy, iptables or iptables-nft
+// detectIptablesCommand will attempt to detect whether to use iptables-legacy, iptables or iptables-nft
 // based on output of iptables-nft or if the command exists.
 //
 // Logic is based on Kubernetes https://github.com/danwinship/kubernetes/blob/ca32fd23cca0797aa787fc5d883807d4eee6899f/build/debian-iptables/iptables-wrapper
-func (s *Server) DetectIptablesCommand() {
+func (s *Server) detectIptablesCommand() string {
 	var err error
 	var numLegacyLines int
 	var numNftLines int
@@ -54,9 +52,8 @@ func (s *Server) DetectIptablesCommand() {
 	}
 
 	if numLegacyLines > 10 {
-		IptablesCmd = "iptables-legacy"
 		log.Infof("Detected iptables-legacy")
-		return
+		return "iptables-legacy"
 	}
 
 	output, err = executeOutput("bash", "-c",
@@ -72,49 +69,50 @@ func (s *Server) DetectIptablesCommand() {
 	}
 
 	if numLegacyLines > numNftLines {
-		IptablesCmd = "iptables-legacy"
-	} else {
-		IptablesCmd = "iptables-nft"
+		log.Infof("Using iptables command: iptables-legacy")
+		return "iptables-legacy"
 	}
+	log.Infof("Using iptables command: iptables-nft")
+	return "iptables-nft"
+}
 
-	log.Infof("Using iptables command: %s", IptablesCmd)
+func (s *Server) IptablesCmd() string {
+	c, _ := s.iptablesCommand.Get()
+	return c
 }
 
 // Initialize the chains and lists for ztunnel
-// https://github.com/solo-io/istio-sidecarless/blob/master/redirect-worker.sh#L36-L47
 func (s *Server) initializeLists() error {
 	var err error
 
-	s.DetectIptablesCommand()
-
 	list := []*ExecList{
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableNat, "-N", constants.ChainZTunnelPrerouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableNat, "-I", "PREROUTING", "-j", constants.ChainZTunnelPrerouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableNat, "-N", constants.ChainZTunnelPostrouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableNat, "-I", "POSTROUTING", "-j", constants.ChainZTunnelPostrouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-N", constants.ChainZTunnelPrerouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-I", "PREROUTING", "-j", constants.ChainZTunnelPrerouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-N", constants.ChainZTunnelPostrouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-I", "POSTROUTING", "-j", constants.ChainZTunnelPostrouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-N", constants.ChainZTunnelOutput}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-I", "OUTPUT", "-j", constants.ChainZTunnelOutput}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-N", constants.ChainZTunnelInput}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-I", "INPUT", "-j", constants.ChainZTunnelInput}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-N", constants.ChainZTunnelForward}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-I", "FORWARD", "-j", constants.ChainZTunnelForward}),
 	}
 
@@ -133,24 +131,23 @@ func (s *Server) initializeLists() error {
 }
 
 // Flush the chains and lists for ztunnel
-// https://github.com/solo-io/istio-sidecarless/blob/master/redirect-worker.sh#L29-L34
 func (s *Server) flushLists() {
 	var err error
 
 	list := []*ExecList{
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableNat, "-F", constants.ChainZTunnelPrerouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableNat, "-F", constants.ChainZTunnelPostrouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-F", constants.ChainZTunnelPrerouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-F", constants.ChainZTunnelPostrouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-F", constants.ChainZTunnelOutput}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-F", constants.ChainZTunnelInput}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-F", constants.ChainZTunnelForward}),
 	}
 
@@ -169,7 +166,7 @@ func (s *Server) cleanRules() {
 
 	list := []*ExecList{
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableNat,
 				"-D", constants.ChainPrerouting,
@@ -177,14 +174,14 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableNat,
 				"-X", constants.ChainZTunnelPrerouting,
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableNat,
 				"-D", constants.ChainPostrouting,
@@ -192,14 +189,14 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableNat,
 				"-X", constants.ChainZTunnelPostrouting,
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainPrerouting,
@@ -207,14 +204,14 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-X", constants.ChainZTunnelPrerouting,
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainPostrouting,
@@ -222,14 +219,14 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-X", constants.ChainZTunnelPostrouting,
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainForward,
@@ -237,14 +234,14 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-X", constants.ChainZTunnelForward,
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainInput,
@@ -252,14 +249,14 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-X", constants.ChainZTunnelInput,
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainOutput,
@@ -267,7 +264,7 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-X", constants.ChainZTunnelOutput,
@@ -291,10 +288,10 @@ func newIptableRule(table, chain string, rule ...string) *iptablesRule {
 	}
 }
 
-func iptablesAppend(rules []*iptablesRule) error {
+func (s *Server) iptablesAppend(rules []*iptablesRule) error {
 	for _, rule := range rules {
 		log.Debugf("Appending rule: %+v", rule)
-		err := execute(IptablesCmd, append([]string{"-t", rule.Table, "-A", rule.Chain}, rule.RuleSpec...)...)
+		err := execute(s.IptablesCmd(), append([]string{"-t", rule.Table, "-A", rule.Chain}, rule.RuleSpec...)...)
 		if err != nil {
 			return err
 		}

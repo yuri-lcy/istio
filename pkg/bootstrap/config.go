@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path"
 	"strconv"
@@ -118,16 +119,42 @@ func (cfg Config) toTemplateParams() (map[string]any, error) {
 	opts = append(opts, getNodeMetadataOptions(cfg.Node)...)
 
 	// Check if nodeIP carries IPv4 or IPv6 and set up proxy accordingly
-	if network.AllIPv6(cfg.Metadata.InstanceIPs) {
+	if network.AllIPv4(cfg.Metadata.InstanceIPs) {
+		// IPv4 only
+		opts = append(opts,
+			option.Localhost(option.LocalhostIPv4),
+			option.Wildcard(option.WildcardIPv4),
+			option.DNSLookupFamily(option.DNSLookupFamilyIPv4))
+	} else if network.AllIPv6(cfg.Metadata.InstanceIPs) {
+		// IPv6 only
 		opts = append(opts,
 			option.Localhost(option.LocalhostIPv6),
 			option.Wildcard(option.WildcardIPv6),
 			option.DNSLookupFamily(option.DNSLookupFamilyIPv6))
 	} else {
-		opts = append(opts,
-			option.Localhost(option.LocalhostIPv4),
-			option.Wildcard(option.WildcardIPv4),
-			option.DNSLookupFamily(option.DNSLookupFamilyIPv4))
+		// Dual Stack
+		if features.EnableDualStack {
+			// If dual-stack, it may be [IPv4, IPv6] or [IPv6, IPv4]
+			// So let the first ip family policy to decide its DNSLookupFamilyIP policy
+			netIP, _ := netip.ParseAddr(cfg.Metadata.InstanceIPs[0])
+			if netIP.Is6() && !netIP.IsLinkLocalUnicast() {
+				opts = append(opts,
+					option.Localhost(option.LocalhostIPv6),
+					option.Wildcard(option.WildcardIPv6),
+					option.DNSLookupFamily(option.DNSLookupFamilyIPS))
+			} else {
+				opts = append(opts,
+					option.Localhost(option.LocalhostIPv4),
+					option.Wildcard(option.WildcardIPv4),
+					option.DNSLookupFamily(option.DNSLookupFamilyIPS))
+			}
+		} else {
+			// keep the original logic if Dual Stack is disable
+			opts = append(opts,
+				option.Localhost(option.LocalhostIPv4),
+				option.Wildcard(option.WildcardIPv4),
+				option.DNSLookupFamily(option.DNSLookupFamilyIPv4))
+		}
 	}
 
 	proxyOpts, err := getProxyConfigOptions(cfg.Metadata)
@@ -281,7 +308,6 @@ var StripFragment = env.Register("HTTP_STRIP_FRAGMENT_FROM_PATH_UNSAFE_IF_DISABL
 func extractRuntimeFlags(cfg *model.NodeMetaProxyConfig) map[string]string {
 	// Setup defaults
 	runtimeFlags := map[string]string{
-		"envoy.reloadable_features.internal_address":                                                           "true",
 		"overload.global_downstream_max_connections":                                                           "2147483647",
 		"envoy.deprecated_features:envoy.config.listener.v3.Listener.hidden_envoy_deprecated_use_original_dst": "true",
 		"re2.max_program_size.error_level":                                                                     "32768",
@@ -376,17 +402,13 @@ func getProxyConfigOptions(metadata *model.BootstrapNodeMetadata) ([]option.Inst
 			opts = append(opts, option.ZipkinAddress(tracer.Zipkin.Address))
 		case *meshAPI.Tracing_Lightstep_:
 			isH2 = true
-			// Create the token file.
+			// Write the token file.
 			lightstepAccessTokenPath := lightstepAccessTokenFile(config.ConfigPath)
-			lsConfigOut, err := os.Create(lightstepAccessTokenPath)
+			//nolint: staticcheck  // Lightstep deprecated
+			err := os.WriteFile(lightstepAccessTokenPath, []byte(tracer.Lightstep.AccessToken), 0o666)
 			if err != nil {
 				return nil, err
 			}
-			_, err = lsConfigOut.WriteString(tracer.Lightstep.AccessToken)
-			if err != nil {
-				return nil, err
-			}
-
 			opts = append(opts, option.LightstepAddress(tracer.Lightstep.Address),
 				option.LightstepToken(lightstepAccessTokenPath))
 		case *meshAPI.Tracing_Datadog_:
@@ -625,7 +647,12 @@ func GetNodeMetaData(options MetadataOptions) (*model.Node, error) {
 		// The locality string was not set, try to get locality from platform
 		l = options.Platform.Locality()
 	} else {
+		// replace "." with "/"
 		localityString := model.GetLocalityLabelOrDefault(meta.Labels[model.LocalityLabel], "")
+		if localityString != "" {
+			// override the label with the sanitized value
+			meta.Labels[model.LocalityLabel] = localityString
+		}
 		l = util.ConvertLocality(localityString)
 	}
 

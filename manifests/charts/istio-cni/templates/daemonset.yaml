@@ -41,9 +41,14 @@ spec:
 {{ toYaml .Values.cni.podAnnotations | indent 8 }}
         {{- end }}
     spec:
-      hostNetwork: true
+      {{if .Values.cni.ambient.enabled }}hostNetwork: true{{ end }}
       nodeSelector:
         kubernetes.io/os: linux
+      # Can be configured to allow for excluding instio-cni from being scheduled on specified nodes
+      {{- with .Values.cni.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       tolerations:
         # Make sure istio-cni-node gets scheduled on all nodes.
         - effect: NoSchedule
@@ -78,9 +83,7 @@ spec:
             runAsGroup: 0
             runAsUser: 0
             runAsNonRoot: false
-            privileged: true
-            capabilities:
-              add: ["NET_ADMIN"]
+            privileged: {{ .Values.cni.privileged }}
 {{- if .Values.cni.seccompProfile }}
             seccompProfile:
 {{ toYaml .Values.cni.seccompProfile | trim | indent 14 }}
@@ -89,6 +92,9 @@ spec:
           args:
             {{- if .Values.global.logging.level }}
             - --log_output_level={{ .Values.global.logging.level }}
+            {{- end}}
+            {{- if .Values.global.logAsJson }}
+            - --log_as_json
             {{- end}}
           env:
 {{- if .Values.cni.cniConfFileName }}
@@ -133,6 +139,10 @@ spec:
                 fieldRef:
                   apiVersion: v1
                   fieldPath: spec.nodeName
+            {{- if .Values.cni.ambient.enabled }}
+            - name: AMBIENT_ENABLED
+              value: "true"
+            {{- end }}
           volumeMounts:
             - mountPath: /host/opt/cni/bin
               name: cni-bin-dir
@@ -140,16 +150,19 @@ spec:
               name: cni-net-dir
             - mountPath: /var/run/istio-cni
               name: cni-log-dir
+            {{- if .Values.cni.ambient.enabled }}
             - mountPath: /etc/ambient-config
               name: cni-ambientconfig
             - mountPath: /etc/acmg-config
               name: cni-acmgconfig
+            {{ end }}
           resources:
 {{- if .Values.cni.resources }}
 {{ toYaml .Values.cni.resources | trim | indent 12 }}
 {{- else }}
 {{ toYaml .Values.global.defaultResources | trim | indent 12 }}
 {{- end }}
+          {{- if .Values.cni.ambient.enabled }}
           lifecycle:
             preStop:
               exec:
@@ -186,6 +199,7 @@ spec:
                   ip link del name istioout
 
                   ipset destroy ztunnel-pods-ips
+        {{ end }}
 {{- if .Values.cni.taint.enabled }}
         - name: taint-controller
 {{- if contains "/" .Values.cni.image }}
@@ -218,12 +232,14 @@ spec:
         - name: cni-bin-dir
           hostPath:
             path: {{ .Values.cni.cniBinDir | default $defaultBinDir }}
+        {{- if .Values.cni.ambient.enabled }}
         - name: cni-ambientconfig
           hostPath:
             path: /etc/ambient-config
         - name: cni-acmgconfig
           hostPath:
             path: /etc/acmg-config
+        {{- end }}
         - name: cni-net-dir
           hostPath:
             path: {{ default "/etc/cni/net.d" .Values.cni.cniConfDir }}

@@ -15,7 +15,6 @@
 package credentialfetcher
 
 import (
-	"context"
 	"testing"
 
 	"istio.io/istio/pkg/security"
@@ -64,6 +63,7 @@ func TestNewCredFetcher(t *testing.T) {
 	// Disable token refresh for GCE VM credential fetcher.
 	plugin.SetTokenRotation(false)
 	for id, tc := range testCases {
+		id, tc := id, tc
 		t.Run(id, func(t *testing.T) {
 			t.Parallel()
 			cf, err := NewCredFetcher(
@@ -87,7 +87,7 @@ func TestNewCredFetcher(t *testing.T) {
 					t.Errorf("%s: GetIdentityProvider returned %s, expected %s", id, idp, tc.expectedIdp)
 				}
 				if tc.fetcherType == security.Mock {
-					token, err := cf.GetPlatformCredential(context.Background())
+					token, err := cf.GetPlatformCredential()
 					if err != nil {
 						t.Errorf("%s: unexpected error calling GetPlatformCredential: %v", id, err)
 					}

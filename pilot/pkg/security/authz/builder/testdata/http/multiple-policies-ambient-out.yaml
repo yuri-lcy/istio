@@ -61,12 +61,8 @@ typedConfig:
             rules:
             - orRules:
                 rules:
-                - header:
-                    name: :authority
-                    suffixMatch: :80
-                - header:
-                    name: :authority
-                    suffixMatch: :90
+                - destinationPort: 80
+                - destinationPort: 90
         principals:
         - andIds:
             ids:
@@ -127,13 +123,11 @@ typedConfig:
                     key: io.istio.peer_principal
                     stringMatch:
                       safeRegex:
-                        googleRe2: {}
                         regex: .*/ns/namespaces1/.*
                 - filterState:
                     key: io.istio.peer_principal
                     stringMatch:
                       safeRegex:
-                        googleRe2: {}
                         regex: .*/ns/namespaces2/.*
       ns[foo]-policy[httpbin-8]-rule[0]:
         permissions:

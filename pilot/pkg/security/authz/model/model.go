@@ -45,6 +45,7 @@ const (
 	attrDestPort         = "destination.port"            // must be in the range [0, 65535].
 	attrConnSNI          = "connection.sni"              // server name indication, e.g. "www.example.com".
 	attrEnvoyFilter      = "experimental.envoy.filters." // an experimental attribute for checking Envoy Metadata directly.
+	attrAny              = "any"                         // adding an `any: true` permission.
 
 	// Internal names used to generate corresponding Envoy matcher.
 	methodHeader = ":method"
@@ -107,6 +108,8 @@ func New(r *authzpb.Rule) (*Model, error) {
 			basePrincipal.appendLast(requestHeaderGenerator{}, k, when.Values, when.NotValues)
 		case strings.HasPrefix(k, attrRequestClaims):
 			basePrincipal.appendLast(requestClaimGenerator{}, k, when.Values, when.NotValues)
+		case k == attrAny:
+			basePermission.appendLast(anyGenerator{}, k, when.Values, when.NotValues)
 		default:
 			return nil, fmt.Errorf("unknown attribute %s", when.Key)
 		}
@@ -155,31 +158,6 @@ func (m *Model) MigrateTrustDomain(tdBundle trustdomain.Bundle) {
 				if len(r.notValues) != 0 {
 					r.notValues = tdBundle.ReplaceTrustDomainAliases(r.notValues)
 				}
-			}
-		}
-	}
-}
-
-// Update the rules in this authz model which are not applicable in an Ambient mode with equivalent applicable
-// ones.
-func (m *Model) AmbientAdaptations() {
-	for i, p := range m.permissions {
-		for j, r := range p.rules {
-			// Mapping a destination port rule to an :authority header with the port suffix
-			if r.key == attrDestPort {
-				if len(r.values) == 0 && len(r.notValues) == 0 {
-					continue
-				}
-				values := make([]string, len(r.values))
-				for k, v := range r.values {
-					values[k] = fmt.Sprintf("*:%s", v)
-				}
-				notValues := make([]string, len(r.notValues))
-				for k, v := range r.notValues {
-					notValues[k] = fmt.Sprintf("*:%s", v)
-				}
-				key := "request.headers[:authority]"
-				m.permissions[i].replaceRule(j, requestHeaderGenerator{}, key, values, notValues)
 			}
 		}
 	}
@@ -355,16 +333,4 @@ func (p *ruleList) appendLast(g generator, key string, values, notValues []strin
 	}
 
 	p.rules = append(p.rules, r)
-}
-
-func (p *ruleList) replaceRule(index int, g generator, key string, values, notValues []string) {
-	if len(values) == 0 && len(notValues) == 0 {
-		return
-	}
-	p.rules[index] = &rule{
-		key:       key,
-		values:    values,
-		notValues: notValues,
-		g:         g,
-	}
 }

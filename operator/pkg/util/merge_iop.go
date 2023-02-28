@@ -140,7 +140,6 @@ type meshConfig struct {
 	OutboundTrafficPolicy          *v1alpha13.MeshConfig_OutboundTrafficPolicy               `json:"outboundTrafficPolicy" patchStrategy:"merge"`
 	TCPKeepalive                   *v1alpha3.ConnectionPoolSettings_TCPSettings_TcpKeepalive `json:"tcpKeepalive" patchStrategy:"merge"`
 	DefaultConfig                  *proxyConfig                                              `json:"defaultConfig" patchStrategy:"merge"`
-	AmbientMesh                    *v1alpha13.MeshConfig_AmbientMeshConfig_AmbientMeshMode   `json:"ambientMesh" patchStrategy:"merge"`
 	ConfigSources                  []*v1alpha13.ConfigSource                                 `json:"configSources" patchStrategy:"merge" patchMergeKey:"address"`
 	TrustDomainAliases             []string                                                  `json:"trustDomainAliases" patchStrategy:"merge"`
 	DefaultServiceExportTo         []string                                                  `json:"defaultServiceExportTo" patchStrategy:"merge"`
@@ -185,7 +184,6 @@ type (
 
 type proxyConfig struct {
 	DrainDuration                  *durationpb.Duration                    `json:"drainDuration" patchStrategy:"replace"`
-	ParentShutdownDuration         *durationpb.Duration                    `json:"parentShutdownDuration" patchStrategy:"replace"`
 	DiscoveryRefreshDelay          *durationpb.Duration                    `json:"discoveryRefreshDelay" patchStrategy:"replace"`
 	TerminationDrainDuration       *durationpb.Duration                    `json:"terminationDrainDuration" patchStrategy:"replace"`
 	Concurrency                    *wrappers.Int32Value                    `json:"concurrency" patchStrategy:"replace"`
