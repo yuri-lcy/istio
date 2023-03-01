@@ -394,7 +394,7 @@ func (lb *ListenerBuilder) buildHTTPConnectionManager(httpOpts *httpListenerOpts
 	routerFilterCtx, reqIDExtensionCtx := configureTracing(lb.push, lb.node, connectionManager, httpOpts.class)
 
 	filters := []*hcm.HttpFilter{}
-	if !httpOpts.isWaypoint {
+	if !httpOpts.isWaypoint || !httpOpts.skipRBACFilters {
 		wasm := lb.push.WasmPluginsByListenerInfo(lb.node, model.WasmPluginListenerInfo{
 			Port:  httpOpts.port,
 			Class: httpOpts.class,
@@ -433,7 +433,7 @@ func (lb *ListenerBuilder) buildHTTPConnectionManager(httpOpts *httpListenerOpts
 
 	// TypedPerFilterConfig in route needs these filters.
 	filters = append(filters, xdsfilters.Fault, xdsfilters.Cors)
-	if !httpOpts.isWaypoint {
+	if !httpOpts.isWaypoint || !httpOpts.skipTelemetryFilters {
 		filters = append(filters, lb.push.Telemetry.HTTPFilters(lb.node, httpOpts.class)...)
 	}
 	// Add EmptySessionFilter so that it can be overridden at route level per service.
