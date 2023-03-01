@@ -63,6 +63,7 @@ func init() {
 }
 
 func (s *DiscoveryServer) findGenerator(typeURL string, con *Connection) model.XdsResourceGenerator {
+	log.Debugf("findGenerator: typeURL is %v, Generator is %v", typeURL, con.proxy.Metadata.Generator)
 	if g, f := s.Generators[con.proxy.Metadata.Generator+"/"+typeURL]; f {
 		return g
 	}
