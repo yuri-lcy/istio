@@ -50,7 +50,7 @@ spec:
       istiod:
         enableAnalysis: false
       logging:
-        level: "default:info"
+        level: "default:info,ads:debug"
       logAsJson: false
       pilotCertProvider: istiod
       jwtPolicy: third-party-jwt
@@ -89,7 +89,7 @@ spec:
             memory: 10Mi
       # Specify image pull policy if default behavior isn't desired.
       # Default behavior: latest images will be Always else IfNotPresent.
-      imagePullPolicy: ""
+      imagePullPolicy: Always
       operatorManageWebhooks: false
       tracer:
         lightstep: {}
