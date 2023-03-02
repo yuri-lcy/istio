@@ -26,13 +26,15 @@ var autoLabel = env.RegisterBoolVar("ACMG_AUTO_LABEL", false, "").Get()
 
 type AutoLabel struct {
 	labeledNamespace []string
-	podQueue         controllers.Queue
+	podQueue         *controllers.Queue
 	podLister        listerv1.PodLister
 	client           kubelib.Client
 }
 
 func NewAutoLabel() *AutoLabel {
-	return &AutoLabel{}
+	return &AutoLabel{
+		labeledNamespace: make([]string, 0),
+	}
 }
 
 func (a *AutoLabel) nsOnAcmg(ns string) bool {
@@ -59,13 +61,14 @@ func (a *AutoLabel) initAutolabel(opts *Options) {
 		controllers.WithReconciler(a.acmgPodLabelPatcher(opts.Client)),
 		controllers.WithMaxAttempts(5),
 	)
-	a.podQueue = podQueue
+	a.podQueue = &podQueue
 	a.client = opts.Client
+	a.podLister = opts.Client.KubeInformer().Core().V1().Pods().Lister()
 
 	ignored := sets.New(append(strings.Split(features.AcmgAutolabelIgnore, ","), opts.SystemNamespace)...)
 	workloadHandler := controllers.FilteredObjectHandler(podQueue.AddObject, a.acmgPodLabelFilter(ignored))
 	opts.Client.KubeInformer().Core().V1().Pods().Informer().AddEventHandler(workloadHandler)
-	go podQueue.Run(opts.Stop)
+	go a.podQueue.Run(opts.Stop)
 }
 
 var labelPatch = []byte(fmt.Sprintf(
@@ -75,7 +78,7 @@ var labelPatch = []byte(fmt.Sprintf(
 ))
 
 func (a *AutoLabel) addPodToQueue(namespace interface{}) {
-	ns := namespace.(v1.Namespace)
+	ns := namespace.(*v1.Namespace)
 
 	a.labeledNamespace = append(a.labeledNamespace, ns.Name)
 	pods, err := a.podLister.Pods(ns.Name).List(klabels.Everything())

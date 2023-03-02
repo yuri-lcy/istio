@@ -86,10 +86,10 @@ func (g *NodeProxyConfigGenerator) Generate(
 	return nil, model.DefaultXdsLogDetails, nil
 }
 
-// parseToCoreProxyClusterName parses cluster names, in the format {%s_to_coreproxy} where src are identities
+// parseToCoreProxyClusterName parses cluster names, in the format {%s_to_coreproxy, sa} where src are identities
 func parseToCoreProxyClusterName(name string) (src string, ok bool) {
 	p := strings.Split(name, "_")
-	if len(p) != 3 || p[1] != "to" || p[3] != "coreproxy" {
+	if len(p) != 3 || p[1] != "to" || p[2] != "coreproxy" {
 		return "", false
 	}
 	return p[0], true
@@ -192,29 +192,33 @@ func passthroughCluster(push *model.PushContext) *discovery.Resource {
 func (g *NodeProxyConfigGenerator) BuildClusters(proxy *model.Proxy, push *model.PushContext, names []string) model.Resources {
 	var out model.Resources
 	var clusters []*cluster.Cluster
+	seen := sets.String{}
 	for _, sourceWl := range push.AcmgIndex.Workloads.NodeLocal(proxy.Metadata.NodeName) {
-		clusters = append(clusters, &cluster.Cluster{
-			Name:                          toCoreProxyClusterName(sourceWl.Identity()),
-			ClusterDiscoveryType:          &cluster.Cluster_Type{Type: cluster.Cluster_EDS},
-			LbPolicy:                      cluster.Cluster_ROUND_ROBIN,
-			ConnectTimeout:                durationpb.New(2 * time.Second),
-			TypedExtensionProtocolOptions: h2connectUpgrade(),
-			TransportSocket: &core.TransportSocket{
-				Name: "envoy.transport_sockets.tls",
-				ConfigType: &core.TransportSocket_TypedConfig{TypedConfig: protoconv.MessageToAny(&tls.UpstreamTlsContext{
-					CommonTlsContext: buildCommonTLSContext(proxy, &sourceWl, push, false),
-				})},
-			},
-			EdsClusterConfig: &cluster.Cluster_EdsClusterConfig{
-				EdsConfig: &core.ConfigSource{
-					ConfigSourceSpecifier: &core.ConfigSource_Ads{
-						Ads: &core.AggregatedConfigSource{},
-					},
-					InitialFetchTimeout: durationpb.New(0),
-					ResourceApiVersion:  core.ApiVersion_V3,
+		clusterName := toCoreProxyClusterName(sourceWl.Identity())
+		if !seen.InsertContains(clusterName) {
+			clusters = append(clusters, &cluster.Cluster{
+				Name:                          clusterName,
+				ClusterDiscoveryType:          &cluster.Cluster_Type{Type: cluster.Cluster_EDS},
+				LbPolicy:                      cluster.Cluster_ROUND_ROBIN,
+				ConnectTimeout:                durationpb.New(2 * time.Second),
+				TypedExtensionProtocolOptions: h2connectUpgrade(),
+				TransportSocket: &core.TransportSocket{
+					Name: "envoy.transport_sockets.tls",
+					ConfigType: &core.TransportSocket_TypedConfig{TypedConfig: protoconv.MessageToAny(&tls.UpstreamTlsContext{
+						CommonTlsContext: buildCommonTLSContext(proxy, &sourceWl, push, false),
+					})},
 				},
-			},
-		})
+				EdsClusterConfig: &cluster.Cluster_EdsClusterConfig{
+					EdsConfig: &core.ConfigSource{
+						ConfigSourceSpecifier: &core.ConfigSource_Ads{
+							Ads: &core.AggregatedConfigSource{},
+						},
+						InitialFetchTimeout: durationpb.New(0),
+						ResourceApiVersion:  core.ApiVersion_V3,
+					},
+				},
+			})
+		}
 	}
 	for _, c := range clusters {
 		out = append(out, &discovery.Resource{

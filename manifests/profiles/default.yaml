@@ -50,7 +50,7 @@ spec:
       istiod:
         enableAnalysis: false
       logging:
-        level: "default:info,ads:debug"
+        level: "default:info,ads:debug,acmg:debug"
       logAsJson: false
       pilotCertProvider: istiod
       jwtPolicy: third-party-jwt
