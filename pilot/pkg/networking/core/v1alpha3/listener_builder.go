@@ -117,7 +117,9 @@ func (lb *ListenerBuilder) WithAcmgWorkload(wl acmg.Workload) *ListenerBuilder {
 }
 
 func (lb *ListenerBuilder) appendSidecarInboundListeners() *ListenerBuilder {
-	if lb.node.IsWaypointProxy() {
+	if lb.node.IsCoreProxy() {
+		lb.inboundListeners = lb.buildCoreProxyInbound()
+	} else if lb.node.IsWaypointProxy() {
 		lb.inboundListeners = lb.buildWaypointInbound()
 	} else {
 		lb.inboundListeners = lb.buildInboundListeners()
@@ -130,7 +132,7 @@ func (lb *ListenerBuilder) appendSidecarInboundListeners() *ListenerBuilder {
 }
 
 func (lb *ListenerBuilder) appendSidecarOutboundListeners() *ListenerBuilder {
-	if !lb.node.IsAmbient() {
+	if !lb.node.IsAmbient() && !lb.node.IsCoreProxy() {
 		lb.outboundListeners = lb.buildSidecarOutboundListeners(lb.node, lb.push)
 	}
 	return lb
@@ -147,7 +149,7 @@ func (lb *ListenerBuilder) buildHTTPProxyListener() *ListenerBuilder {
 }
 
 func (lb *ListenerBuilder) buildVirtualOutboundListener() *ListenerBuilder {
-	if lb.node.GetInterceptionMode() == model.InterceptionNone || lb.node.IsWaypointProxy() {
+	if lb.node.GetInterceptionMode() == model.InterceptionNone || lb.node.IsWaypointProxy() || lb.node.IsCoreProxy() {
 		// virtual listener is not necessary since workload is not using IPtables for traffic interception
 		return lb
 	}

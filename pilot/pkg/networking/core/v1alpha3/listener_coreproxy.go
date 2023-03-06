@@ -63,7 +63,7 @@ func FindAllResources(push *model.PushContext) ([]LabeledWorkloadAndServices, ma
 	for i, wl := range wls {
 		for _, ns := range push.ServiceIndex.HostnameAndNamespace {
 			svc := ns[wl.WorkloadInfo.Namespace]
-			if svc == nil {
+			if svc == nil || len(svc.Attributes.LabelSelectors) == 0 {
 				continue
 			}
 			if labels.Instance(svc.Attributes.LabelSelectors).SubsetOf(wl.WorkloadInfo.Labels) {
@@ -77,6 +77,7 @@ func FindAllResources(push *model.PushContext) ([]LabeledWorkloadAndServices, ma
 }
 
 func (lb *ListenerBuilder) buildCoreProxyInbound() []*listener.Listener {
+	log.Infof("buildCoreProxyInbound for coreproxy")
 	listeners := []*listener.Listener{}
 	// We create 4 listeners:
 	// 1. Our top level terminating CONNECT listener, `inbound TERMINATE`. This has a route per destination and decapsulates the CONNECT,
@@ -297,10 +298,12 @@ func (lb *ListenerBuilder) buildCoreProxyInboundVIPHTTPFilters(svc *model.Servic
 			},
 			ServerName: EnvoyServerName,
 		},
-		protocol:        cc.port.Protocol,
-		class:           istionetworking.ListenerClassSidecarInbound,
-		statPrefix:      cc.StatPrefix(),
-		skipRBACFilters: true, // Handled by pod listener
+		protocol:   cc.port.Protocol,
+		class:      istionetworking.ListenerClassSidecarInbound,
+		statPrefix: cc.StatPrefix(),
+
+		skipTelemetryFilters: true, // do not include telemetry filters on the CONNECT termination chain
+		skipRBACFilters:      true, // Handled by pod listener
 	}
 	// See https://github.com/grpc/grpc-web/tree/master/net/grpc/gateway/examples/helloworld#configure-the-proxy
 	if cc.port.Protocol.IsHTTP2() {

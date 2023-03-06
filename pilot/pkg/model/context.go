@@ -669,6 +669,9 @@ type NodeMetadata struct {
 	// The istiod address when running ASM Managed Control Plane.
 	CloudrunAddr string `json:"CLOUDRUN_ADDR,omitempty"`
 
+	// AcmgType can be one of acmg.NodeType TODO(stevenctl,ambient) make the type ambient.NodeType
+	AcmgType string `json:"ACMG_TYPE,omitempty"`
+
 	// Contains a copy of the raw metadata. This is needed to lookup arbitrary values.
 	// If a value is known ahead of time it should be added to the struct rather than reading from here,
 	Raw map[string]any `json:"-"`
@@ -720,12 +723,12 @@ func (node *Proxy) IsAmbient() bool {
 
 // IsCoreProxy returns true if the proxy is acting as a coreproxy proxy in an acmg mesh.
 func (node *Proxy) IsCoreProxy() bool {
-	return node.Type == CoreProxy
+	return node.Metadata.AcmgType == acmg.TypeCoreProxy
 }
 
 // IsNodeProxy returns true if the proxy is acting as a nodeproxy in an acmg mesh.
 func (node *Proxy) IsNodeProxy() bool {
-	return node.Type == NodeProxy
+	return node.Metadata.AcmgType == acmg.TypeNodeProxy
 }
 
 // IsAcmg returns true if the proxy is acting as either a nodeproxy or a coreproxy in an acmg mesh.

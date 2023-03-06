@@ -569,11 +569,11 @@ func (s *DiscoveryServer) InitGenerators(env *model.Environment, systemNameSpace
 	s.Generators["nodeproxy-envoy/"+v3.EndpointType] = s.Generators["nodeproxy-envoy"]
 	s.Generators["nodeproxy-envoy/"+v3.ExtensionConfigurationType] = ecdsGen
 
-	coreproxyGen := &acmggen.CoreProxyGenerator{
-		ConfigGenerator: s.ConfigGenerator,
-	}
-	s.Generators["coreproxy/"+v3.ListenerType] = coreproxyGen
-	s.Generators["coreproxy/"+v3.ClusterType] = coreproxyGen
+	s.Generators["coreproxy-envoy"] = &acmggen.CoreProxyGenerator{ConfigGenerator: s.ConfigGenerator}
+
+	s.Generators["coreproxy-envoy/"+v3.ListenerType] = s.Generators["coreproxy-envoy"]
+	s.Generators["coreproxy-envoy/"+v3.ClusterType] = s.Generators["coreproxy-envoy"]
+	s.Generators["coreproxy-envoy/"+v3.ExtensionConfigurationType] = ecdsGen
 
 	s.Generators["api"] = apigen.NewGenerator(env.ConfigStore)
 	s.Generators["api/"+v3.EndpointType] = edsGen
