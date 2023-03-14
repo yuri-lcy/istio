@@ -90,6 +90,13 @@ message CNIConfig {
   google.protobuf.Struct seccompProfile = 19;
 
   CNIAmbientConfig ambient = 21;
+
+  CNIAcmgConfig acmg = 22;
+}
+
+message CNIAcmgConfig {
+  // Controls whether ambient redirection is enabled
+  google.protobuf.BoolValue enabled = 1;
 }
 
 message CNIAmbientConfig {
@@ -1162,6 +1169,10 @@ message Values {
   PilotConfig pilot = 10;
 
   google.protobuf.Value ztunnel = 41;
+
+  google.protobuf.Value coreproxy = 42;
+
+  google.protobuf.Value nodeproxy = 43;
 
   // Controls whether telemetry is exported for Pilot.
   TelemetryConfig telemetry = 23;

@@ -153,6 +153,8 @@ spec:
             {{- if .Values.cni.ambient.enabled }}
             - mountPath: /etc/ambient-config
               name: cni-ambientconfig
+            {{ end }}
+            {{- if .Values.cni.acmg.enabled }}
             - mountPath: /etc/acmg-config
               name: cni-acmgconfig
             {{ end }}

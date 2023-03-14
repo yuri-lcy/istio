@@ -42,6 +42,8 @@ spec:
     cni:
       logLevel: "debug"
       privileged: true
+      acmg:
+        enabled: true
       # TODO: For enhanced security, ambient defaults to distroless images
       # variant: distroless
     telemetry:
