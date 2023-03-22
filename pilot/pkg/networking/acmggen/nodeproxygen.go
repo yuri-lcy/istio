@@ -197,10 +197,15 @@ func (g *NodeProxyConfigGenerator) BuildClusters(proxy *model.Proxy, push *model
 		clusterName := toCoreProxyClusterName(sourceWl.Identity())
 		if !seen.InsertContains(clusterName) {
 			clusters = append(clusters, &cluster.Cluster{
-				Name:                          clusterName,
-				ClusterDiscoveryType:          &cluster.Cluster_Type{Type: cluster.Cluster_EDS},
-				LbPolicy:                      cluster.Cluster_ROUND_ROBIN,
-				ConnectTimeout:                durationpb.New(2 * time.Second),
+				Name:                 clusterName,
+				ClusterDiscoveryType: &cluster.Cluster_Type{Type: cluster.Cluster_EDS},
+				LbPolicy:             cluster.Cluster_ROUND_ROBIN,
+				ConnectTimeout:       durationpb.New(2 * time.Second),
+				LbConfig: &cluster.Cluster_OriginalDstLbConfig_{
+					OriginalDstLbConfig: &cluster.Cluster_OriginalDstLbConfig{
+						UpstreamPortOverride: &wrappers.UInt32Value{Value: NodeProxyInboundCapturePort},
+					},
+				},
 				TypedExtensionProtocolOptions: h2connectUpgrade(),
 				TransportSocket: &core.TransportSocket{
 					Name: "envoy.transport_sockets.tls",
@@ -515,27 +520,6 @@ func h2connectUpgrade() map[string]*any.Any {
 				},
 			}},
 		}),
-	}
-}
-
-// outboundTunnelCluster is per-workload SA, but requires one workload that uses that SA so we can send the Pod UID
-func outboundTunnelCluster(proxy *model.Proxy, push *model.PushContext, sa string, workload *acmg.Workload) *cluster.Cluster {
-	return &cluster.Cluster{
-		Name:                 outboundTunnelClusterName(sa),
-		ClusterDiscoveryType: &cluster.Cluster_Type{Type: cluster.Cluster_ORIGINAL_DST},
-		LbPolicy:             cluster.Cluster_CLUSTER_PROVIDED,
-		ConnectTimeout:       durationpb.New(2 * time.Second),
-		CleanupInterval:      durationpb.New(60 * time.Second),
-		LbConfig: &cluster.Cluster_OriginalDstLbConfig_{
-			OriginalDstLbConfig: &cluster.Cluster_OriginalDstLbConfig{},
-		},
-		TypedExtensionProtocolOptions: h2connectUpgrade(),
-		TransportSocket: &core.TransportSocket{
-			Name: "envoy.transport_sockets.tls",
-			ConfigType: &core.TransportSocket_TypedConfig{TypedConfig: protoconv.MessageToAny(&tls.UpstreamTlsContext{
-				CommonTlsContext: buildCommonTLSContext(proxy, workload, push, false),
-			})},
-		},
 	}
 }
 

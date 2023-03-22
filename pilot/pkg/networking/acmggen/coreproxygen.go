@@ -11,6 +11,8 @@ import (
 	httpconn "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tls "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"istio.io/istio/pilot/pkg/acmg"
 	"istio.io/istio/pilot/pkg/model"
 	core2 "istio.io/istio/pilot/pkg/networking/core"
 	"istio.io/istio/pilot/pkg/networking/core/v1alpha3"
@@ -21,6 +23,7 @@ import (
 	"istio.io/istio/pkg/config/protocol"
 	"istio.io/istio/pkg/proto"
 	"istio.io/istio/pkg/util/sets"
+	"time"
 )
 
 type CoreProxyGenerator struct {
@@ -208,4 +211,25 @@ func (p *CoreProxyGenerator) buildClusters(node *model.Proxy, push *model.PushCo
 		out = append(out, &discovery.Resource{Name: c.Name, Resource: protoconv.MessageToAny(c)})
 	}
 	return out
+}
+
+// outboundTunnelCluster is per-workload SA, but requires one workload that uses that SA so we can send the Pod UID
+func outboundTunnelCluster(proxy *model.Proxy, push *model.PushContext, sa string, workload *acmg.Workload) *cluster.Cluster {
+	return &cluster.Cluster{
+		Name:                 outboundTunnelClusterName(sa),
+		ClusterDiscoveryType: &cluster.Cluster_Type{Type: cluster.Cluster_ORIGINAL_DST},
+		LbPolicy:             cluster.Cluster_CLUSTER_PROVIDED,
+		ConnectTimeout:       durationpb.New(2 * time.Second),
+		CleanupInterval:      durationpb.New(60 * time.Second),
+		LbConfig: &cluster.Cluster_OriginalDstLbConfig_{
+			OriginalDstLbConfig: &cluster.Cluster_OriginalDstLbConfig{UseHttpHeader: true},
+		},
+		TypedExtensionProtocolOptions: h2connectUpgrade(),
+		TransportSocket: &core.TransportSocket{
+			Name: "envoy.transport_sockets.tls",
+			ConfigType: &core.TransportSocket_TypedConfig{TypedConfig: protoconv.MessageToAny(&tls.UpstreamTlsContext{
+				CommonTlsContext: buildCommonTLSContext(proxy, workload, push, false),
+			})},
+		},
+	}
 }

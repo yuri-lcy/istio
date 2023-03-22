@@ -90,7 +90,7 @@ func (s *Server) initializeLists() error {
 		newExec(IptablesCmd,
 			[]string{"-t", constants.TableNat, "-N", constants.ChainNodeProxyPrerouting}),
 		newExec(IptablesCmd,
-			[]string{"-t", constants.TableNat, "-I", "PREROUTING", "-j", constants.ChainPrerouting}),
+			[]string{"-t", constants.TableNat, "-I", "PREROUTING", "-j", constants.ChainNodeProxyPrerouting}),
 		newExec(IptablesCmd,
 			[]string{"-t", constants.TableNat, "-N", constants.ChainNodeProxyPostrouting}),
 		newExec(IptablesCmd,

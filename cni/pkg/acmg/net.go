@@ -220,6 +220,7 @@ func GetHostIP(kubeClient kubernetes.Interface) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("error parsing node IP: %v", err)
 		}
+		log.Infof("network is %v", network)
 
 		ifaces, err := net.Interfaces()
 		if err != nil {
@@ -228,6 +229,8 @@ func GetHostIP(kubeClient kubernetes.Interface) (string, error) {
 
 		for _, iface := range ifaces {
 			addrs, err := iface.Addrs()
+			log.Infof("iface is %v %v", iface.Name, addrs)
+
 			if err != nil {
 				return "", fmt.Errorf("error getting addresses: %v", err)
 			}
@@ -256,7 +259,7 @@ func (s *Server) CreateRulesOnNode(nodeproxyVeth, nodeproxyIP string, captureDNS
 
 	// Check if chain exists, if it exists flush.. otherwise initialize
 	// https://github.com/solo-io/istio-sidecarless/blob/master/redirect-worker.sh#L28
-	err = execute(IptablesCmd, "-t", "mangle", "-C", "output", "-j", constants.ChainNodeProxyOutput)
+	err = execute(IptablesCmd, "-t", "mangle", "-C", "OUTPUT", "-j", constants.ChainNodeProxyOutput)
 	if err == nil {
 		log.Debugf("Chain %s already exists, flushing", constants.ChainOutput)
 		s.flushLists()
@@ -536,10 +539,10 @@ func (s *Server) CreateRulesOnNode(nodeproxyVeth, nodeproxyIP string, captureDNS
 	// @TODO: This likely needs to be cleaned up, there are a lot of martians in AWS
 	// that seem to necessitate this work.
 	procs := map[string]int{
-		"/proc/sys/net/ipv4/conf/default/rp_filter":                0,
-		"/proc/sys/net/ipv4/conf/all/rp_filter":                    0,
-		"/proc/sys/net/ipv4/conf/" + nodeproxyVeth + "/rp_filter":  0,
-		"/proc/sys/net/ipv4/conf/" + nodeproxyIP + "/accept_local": 1,
+		"/proc/sys/net/ipv4/conf/default/rp_filter":                  0,
+		"/proc/sys/net/ipv4/conf/all/rp_filter":                      0,
+		"/proc/sys/net/ipv4/conf/" + nodeproxyVeth + "/rp_filter":    0,
+		"/proc/sys/net/ipv4/conf/" + nodeproxyVeth + "/accept_local": 1,
 	}
 	for proc, val := range procs {
 		err = SetProc(proc, fmt.Sprint(val))
@@ -737,6 +740,7 @@ func (s *Server) cleanup() {
 		}
 	}
 
+	log.Debugf("Del InboundTun.")
 	// Delete tunnel links
 	err := netlink.LinkDel(&netlink.Geneve{
 		LinkAttrs: netlink.LinkAttrs{
@@ -746,6 +750,8 @@ func (s *Server) cleanup() {
 	if err != nil {
 		log.Warnf("error deleting inbound tunnel: %v", err)
 	}
+
+	log.Debugf("Del OutboundTun.")
 	err = netlink.LinkDel(&netlink.Geneve{
 		LinkAttrs: netlink.LinkAttrs{
 			Name: constants.OutboundTun,

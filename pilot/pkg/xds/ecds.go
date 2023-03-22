@@ -16,6 +16,7 @@ package xds
 
 import (
 	"fmt"
+	"istio.io/istio/pilot/pkg/networking/acmggen"
 	"strings"
 
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
@@ -79,6 +80,18 @@ func onlyReferencedConfigsUpdated(req *model.PushRequest) bool {
 
 // Generate returns ECDS resources for a given proxy.
 func (e *EcdsGenerator) Generate(proxy *model.Proxy, w *model.WatchedResource, req *model.PushRequest) (model.Resources, model.XdsLogDetails, error) {
+	isWorkloadMeta := false
+	for _, name := range w.ResourceNames {
+		if strings.EqualFold(name, acmggen.WorkloadMetadataListenerFilterName) {
+			isWorkloadMeta = true
+			break
+		}
+	}
+	if isWorkloadMeta {
+		wg := &acmggen.WorkloadMetadataGenerator{Workloads: e.Server.Env}
+		return wg.Generate(proxy, w, req)
+	}
+
 	if !ecdsNeedsPush(req) {
 		return nil, model.DefaultXdsLogDetails, nil
 	}

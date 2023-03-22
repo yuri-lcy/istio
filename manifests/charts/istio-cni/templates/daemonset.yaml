@@ -41,7 +41,11 @@ spec:
 {{ toYaml .Values.cni.podAnnotations | indent 8 }}
         {{- end }}
     spec:
-      {{if .Values.cni.ambient.enabled }}hostNetwork: true{{ end }}
+      {{if .Values.cni.ambient.enabled }}
+      hostNetwork: true
+      {{ else if .Values.cni.acmg.enabled }}
+      hostNetwork: true
+      {{ end }}
       nodeSelector:
         kubernetes.io/os: linux
       # Can be configured to allow for excluding instio-cni from being scheduled on specified nodes
@@ -238,6 +242,8 @@ spec:
         - name: cni-ambientconfig
           hostPath:
             path: /etc/ambient-config
+        {{- end }}
+        {{- if .Values.cni.acmg.enabled }}
         - name: cni-acmgconfig
           hostPath:
             path: /etc/acmg-config

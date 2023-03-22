@@ -63,6 +63,7 @@ func (s *Server) setupHandlers() {
 	ns.Informer().AddEventHandler(controllers.ObjectHandler(s.queue.AddObject))
 
 	s.kubeClient.KubeInformer().Core().V1().Pods().Informer().AddEventHandler(s.newPodInformer())
+	log.Infof("acmg handlers init ok!")
 }
 
 func (s *Server) Run(stop <-chan struct{}) {
@@ -149,7 +150,7 @@ func (s *Server) newPodInformer() *cache.ResourceEventHandlerFuncs {
 		// we need to check to see if pod is running, if so, it's safe to
 		// assume it's existing and we've restarted.
 		//
-		// We also watch for ztunnel to start, because that means we need to trigger
+		// We also watch for nodeproxy to start, because that means we need to trigger
 		// a bunch of iptable and routing changes.
 		AddFunc: func(obj interface{}) {
 			// @TODO: maybe not using the full pod struct, likely related to
