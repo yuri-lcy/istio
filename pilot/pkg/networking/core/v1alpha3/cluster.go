@@ -16,6 +16,7 @@ package v1alpha3
 
 import (
 	"fmt"
+	"istio.io/istio/pilot/pkg/acmg"
 	"math"
 	"net"
 	"strconv"
@@ -173,10 +174,15 @@ func (configgen *ConfigGeneratorImpl) buildClusters(proxy *model.Proxy, req *mod
 		// Add a blackhole and passthrough cluster for catching traffic to unresolved routes
 		clusters = outboundPatcher.conditionallyAppend(clusters, nil, cb.buildBlackHoleCluster(), cb.buildDefaultPassthroughCluster())
 		clusters = append(clusters, outboundPatcher.insertedClusters()...)
+		// TODO NodeType
 		// Setup inbound clusters
 		inboundPatcher := clusterPatcher{efw: envoyFilterPatches, pctx: networking.EnvoyFilter_SIDECAR_INBOUND}
-		clusters = append(clusters, configgen.buildInboundClusters(cb, proxy, instances, inboundPatcher)...)
-		clusters = append(clusters, configgen.buildInboundHBONEClusters(cb, proxy, instances)...)
+		if proxy.Metadata.AcmgType == acmg.TypeCoreProxy {
+			clusters = append(clusters, configgen.buildCoreProxyInboundClusters(cb, proxy, req.Push)...)
+		} else {
+			clusters = append(clusters, configgen.buildInboundClusters(cb, proxy, instances, inboundPatcher)...)
+			clusters = append(clusters, configgen.buildInboundHBONEClusters(cb, proxy, instances)...)
+		}
 		// Pass through clusters for inbound traffic. These cluster bind loopback-ish src address to access node local service.
 		clusters = inboundPatcher.conditionallyAppend(clusters, nil, cb.buildInboundPassthroughClusters()...)
 		clusters = append(clusters, inboundPatcher.insertedClusters()...)

@@ -140,7 +140,7 @@ func (g *NodeProxyConfigGenerator) buildVirtualInboundClusterHBONE() *discovery.
 		LbConfig: &cluster.Cluster_OriginalDstLbConfig_{
 			OriginalDstLbConfig: &cluster.Cluster_OriginalDstLbConfig{
 				UseHttpHeader:        true,
-				UpstreamPortOverride: &wrappers.UInt32Value{Value: NodeProxyInboundCapturePort},
+				UpstreamPortOverride: NodeProxyInboundCapturePort,
 			},
 		},
 	}
@@ -201,11 +201,11 @@ func (g *NodeProxyConfigGenerator) BuildClusters(proxy *model.Proxy, push *model
 				ClusterDiscoveryType: &cluster.Cluster_Type{Type: cluster.Cluster_EDS},
 				LbPolicy:             cluster.Cluster_ROUND_ROBIN,
 				ConnectTimeout:       durationpb.New(2 * time.Second),
-				LbConfig: &cluster.Cluster_OriginalDstLbConfig_{
-					OriginalDstLbConfig: &cluster.Cluster_OriginalDstLbConfig{
-						UpstreamPortOverride: &wrappers.UInt32Value{Value: NodeProxyInboundCapturePort},
-					},
-				},
+				//LbConfig: &cluster.Cluster_OriginalDstLbConfig_{
+				//	OriginalDstLbConfig: &cluster.Cluster_OriginalDstLbConfig{
+				//		UpstreamPortOverride: NodeProxyInboundCapturePort,
+				//	},
+				//},
 				TypedExtensionProtocolOptions: h2connectUpgrade(),
 				TransportSocket: &core.TransportSocket{
 					Name: "envoy.transport_sockets.tls",
@@ -612,7 +612,7 @@ func passthroughFilterChain() *listener.FilterChain {
 }
 
 func buildCoreProxyLbEndpoints(push *model.PushContext) []*endpoint.LocalityLbEndpoints {
-	port := NodeProxyOutboundCapturePort
+	port := NodeProxyInbound2CapturePort
 
 	lbEndpoints := &endpoint.LocalityLbEndpoints{
 		LbEndpoints: []*endpoint.LbEndpoint{},

@@ -15,6 +15,7 @@
 package xds
 
 import (
+	"istio.io/istio/pilot/pkg/acmg"
 	"net"
 	"net/netip"
 	"sort"
@@ -381,6 +382,11 @@ func (b *EndpointBuilder) createClusterLoadAssignment(llbOpts []*LocalityEndpoin
 func buildEnvoyLbEndpoint(b *EndpointBuilder, e *model.IstioEndpoint) *endpoint.LbEndpoint {
 	dir, _, _, _ := model.ParseSubsetKey(b.clusterName)
 	addr := util.BuildAddress(e.Address, e.EndpointPort)
+	if dir == model.TrafficDirectionInboundVIP && b.proxy.Metadata.AcmgType == acmg.TypeCoreProxy {
+		// For inbound, we only use EDS for the VIP cases. The VIP cluster will point to internal per-pod listeners
+		target := model.BuildSubsetKey(model.TrafficDirectionInboundPod, "", host.Name(e.Address), int(e.EndpointPort))
+		addr = util.BuildInternalAddress(target)
+	}
 	healthStatus := core.HealthStatus_HEALTHY
 	// This is enabled by features.SendUnhealthyEndpoints - otherwise they are not tracked.
 	if e.HealthStatus == model.UnHealthy {
@@ -458,7 +464,7 @@ func buildEnvoyLbEndpoint(b *EndpointBuilder, e *model.IstioEndpoint) *endpoint.
 			},
 		}
 	}
-	if dir == model.TrafficDirectionInboundVIP {
+	if dir == model.TrafficDirectionInboundVIP && b.proxy.IsWaypointProxy() {
 		inScope := waypointInScope(b.proxy, e)
 		if !inScope {
 			// A waypoint can *partially* select a Service in edge cases. In this case, some % of requests will

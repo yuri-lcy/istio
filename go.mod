@@ -10,6 +10,8 @@ replace github.com/imdario/mergo => github.com/imdario/mergo v0.3.5
 
 replace istio.io/api => github.com/yuri-lcy/api v0.0.0-20230224024019-102f0d25f20c
 
+replace github.com/envoyproxy/go-control-plane => github.com/yuri-lcy/go-control-plane v0.11.1-0.20230322115949-5bca0c2dbd10
+
 require (
 	cloud.google.com/go/compute/metadata v0.2.3
 	cloud.google.com/go/monitoring v1.12.0
@@ -27,7 +29,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.5.0
 	github.com/davecgh/go-spew v1.1.1
 	github.com/docker/cli v23.0.0+incompatible
-	github.com/envoyproxy/go-control-plane v0.11.1-0.20230210215507-c077a74bfa9b
+	github.com/envoyproxy/go-control-plane v0.10.3
 	github.com/evanphx/json-patch/v5 v5.6.0
 	github.com/fatih/color v1.14.1
 	github.com/felixge/fgprof v0.9.3

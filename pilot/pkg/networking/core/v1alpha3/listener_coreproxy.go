@@ -77,8 +77,7 @@ func FindAllResources(push *model.PushContext) ([]LabeledWorkloadAndServices, ma
 }
 
 func (lb *ListenerBuilder) buildCoreProxyInbound() []*listener.Listener {
-	log.Infof("buildCoreProxyInbound for coreproxy")
-	listeners := []*listener.Listener{}
+	listeners := make([]*listener.Listener, 0)
 	// We create 4 listeners:
 	// 1. Our top level terminating CONNECT listener, `inbound TERMINATE`. This has a route per destination and decapsulates the CONNECT,
 	//    forwarding to the VIP or Pod internal listener.
