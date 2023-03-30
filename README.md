@@ -38,7 +38,7 @@ kind create cluster --config=- <<<"${kindConfig[@]}"
 
 ### Installing
 
-Installing Istio with Ambient enabled is simple -- just pass `--set profile=ambient`.
+Installing Istio with Ambient enabled is simple -- just pass `--set profile=acmg`.
 
 First you will need to download the Ambient-enabled build of `istioctl`:
 
