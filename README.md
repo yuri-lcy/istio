@@ -1,4 +1,4 @@
-# Ambient Mesh
+# Acmg Mesh
 
 This branch contains the experimental Ambient mesh functionality of Istio.
 See the [Introducing Ambient Mesh](https://istio.io/latest/blog/2022/introducing-ambient-mesh/) and [Getting Started with Ambient](https://istio.io/latest/blog/2022/get-started-ambient/) blogs for more information.

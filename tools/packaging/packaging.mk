@@ -90,6 +90,7 @@ rpm/fpm:
 
 # Centos 7 compatible RPM
 rpm-7/fpm:
+	$(info TARGET_OUT_LINUX is $(TARGET_OUT_LINUX))
 	rm -f ${TARGET_OUT_LINUX}/release/istio-sidecar-centos-7.rpm
 	fpm -s dir -t rpm -n ${SIDECAR_PACKAGE_NAME} -p ${TARGET_OUT_LINUX}/release/istio-sidecar-centos-7.rpm --version $(PACKAGE_VERSION) -f \
 		--url http://istio.io  \
