@@ -140,7 +140,7 @@ func (g *NodeProxyConfigGenerator) buildVirtualInboundClusterHBONE() *discovery.
 		LbConfig: &cluster.Cluster_OriginalDstLbConfig_{
 			OriginalDstLbConfig: &cluster.Cluster_OriginalDstLbConfig{
 				UseHttpHeader:        true,
-				UpstreamPortOverride: NodeProxyInboundCapturePort,
+				UpstreamPortOverride: &wrappers.UInt32Value{Value: NodeProxyInboundCapturePort},
 			},
 		},
 	}
