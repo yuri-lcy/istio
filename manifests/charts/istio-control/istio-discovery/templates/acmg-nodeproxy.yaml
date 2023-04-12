@@ -280,6 +280,7 @@ spec:
           args:
             - proxy
             - sidecar
+            - --proxyLogLevel=trace
           env:
             - name: ISTIO_META_GENERATOR
               value: "nodeproxy-envoy"
@@ -287,8 +288,6 @@ spec:
               value: "nodeproxy"
             - name: ISTIO_META_CLUSTER_ID
               value: {{ .Values.global.multiCluster.clusterName | default "Kubernetes" }}
-            - name: CREDENTIAL_FETCHER_TYPE
-              value: "TokenRequest"
             - name: POD_NAME
               valueFrom:
                 fieldRef:

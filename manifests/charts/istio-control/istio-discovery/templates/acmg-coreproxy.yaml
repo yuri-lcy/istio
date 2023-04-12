@@ -68,7 +68,7 @@ spec:
         - sidecar
         - --domain
         - $(POD_NAMESPACE).svc.cluster.local
-        - --proxyLogLevel=warning
+        - --proxyLogLevel=trace
         - --proxyComponentLogLevel=misc:error
         - --trust-domain=cluster.local
         - --concurrency

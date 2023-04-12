@@ -10,7 +10,7 @@ replace github.com/imdario/mergo => github.com/imdario/mergo v0.3.5
 
 replace istio.io/api => github.com/yuri-lcy/api v0.0.0-20230224024019-102f0d25f20c
 
-// replace github.com/envoyproxy/go-control-plane => github.com/yuri-lcy/go-control-plane v0.11.1-0.20230322115949-5bca0c2dbd10
+replace github.com/envoyproxy/go-control-plane => github.com/yuri-lcy/go-control-plane v0.11.1-0.20230322115949-5bca0c2dbd10
 
 require (
 	cloud.google.com/go/compute/metadata v0.2.3
@@ -23,17 +23,19 @@ require (
 	github.com/cenkalti/backoff/v4 v4.2.0
 	github.com/census-instrumentation/opencensus-proto v0.4.1
 	github.com/cheggaaa/pb/v3 v3.1.0
+	github.com/cilium/ebpf v0.8.1
 	github.com/cncf/xds/go v0.0.0-20230112175826-46e39c7b9b43
 	github.com/containernetworking/cni v1.1.2
 	github.com/containernetworking/plugins v1.2.0
 	github.com/coreos/go-oidc/v3 v3.5.0
 	github.com/davecgh/go-spew v1.1.1
 	github.com/docker/cli v23.0.0+incompatible
-	github.com/envoyproxy/go-control-plane v0.11.1-0.20230210215507-c077a74bfa9b
+	github.com/envoyproxy/go-control-plane v0.10.3
 	github.com/evanphx/json-patch/v5 v5.6.0
 	github.com/fatih/color v1.14.1
 	github.com/felixge/fgprof v0.9.3
 	github.com/florianl/go-nflog/v2 v2.0.1
+	github.com/florianl/go-tc v0.4.2
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.2
@@ -181,7 +183,7 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jonboulle/clockwork v0.3.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
-	github.com/josharian/native v1.1.0 // indirect
+	github.com/josharian/native v1.1.0
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.15.14 // indirect
 	github.com/kr/text v0.2.0 // indirect

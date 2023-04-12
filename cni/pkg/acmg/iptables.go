@@ -26,17 +26,16 @@ type iptablesRule struct {
 	RuleSpec []string
 }
 
-var IptablesCmd = "iptables-nft"
-
 // DetectIptablesCommand will attempt to detect whether to use iptables-legacy, iptables or iptables-nft
 // based on output of iptables-nft or if the command exists.
 //
 // Logic is based on Kubernetes https://github.com/danwinship/kubernetes/blob/ca32fd23cca0797aa787fc5d883807d4eee6899f/build/debian-iptables/iptables-wrapper
-func (s *Server) DetectIptablesCommand() {
+func (s *Server) detectIptablesCommand() string {
 	var err error
 	var numLegacyLines int
 	var numNftLines int
 	var output string
+	var IptablesCmd string
 
 	log.Infof("Detecting iptables command")
 
@@ -55,7 +54,7 @@ func (s *Server) DetectIptablesCommand() {
 	if numLegacyLines > 10 {
 		IptablesCmd = "iptables-legacy"
 		log.Infof("Detected iptables-legacy")
-		return
+		return IptablesCmd
 	}
 
 	output, err = executeOutput("bash", "-c",
@@ -77,6 +76,12 @@ func (s *Server) DetectIptablesCommand() {
 	}
 
 	log.Infof("Using iptables command: %s", IptablesCmd)
+	return IptablesCmd
+}
+
+func (s *Server) IptablesCmd() string {
+	c, _ := s.iptablesCommand.Get()
+	return c
 }
 
 // Initialize the chains and lists for ztunnel
@@ -84,36 +89,34 @@ func (s *Server) DetectIptablesCommand() {
 func (s *Server) initializeLists() error {
 	var err error
 
-	s.DetectIptablesCommand()
-
 	list := []*ExecList{
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableNat, "-N", constants.ChainNodeProxyPrerouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableNat, "-I", "PREROUTING", "-j", constants.ChainNodeProxyPrerouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableNat, "-N", constants.ChainNodeProxyPostrouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableNat, "-I", "POSTROUTING", "-j", constants.ChainNodeProxyPostrouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-N", constants.ChainNodeProxyPrerouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-I", "PREROUTING", "-j", constants.ChainNodeProxyPrerouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-N", constants.ChainNodeProxyPostrouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-I", "POSTROUTING", "-j", constants.ChainNodeProxyPostrouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-N", constants.ChainNodeProxyOutput}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-I", "OUTPUT", "-j", constants.ChainNodeProxyOutput}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-N", constants.ChainNodeProxyInput}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-I", "INPUT", "-j", constants.ChainNodeProxyInput}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-N", constants.ChainNodeProxyForward}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-I", "FORWARD", "-j", constants.ChainNodeProxyForward}),
 	}
 
@@ -137,19 +140,19 @@ func (s *Server) flushLists() {
 	var err error
 
 	list := []*ExecList{
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableNat, "-F", constants.ChainNodeProxyPrerouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableNat, "-F", constants.ChainNodeProxyPostrouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-F", constants.ChainNodeProxyPrerouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-F", constants.ChainNodeProxyPostrouting}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-F", constants.ChainNodeProxyOutput}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-F", constants.ChainNodeProxyInput}),
-		newExec(IptablesCmd,
+		newExec(s.IptablesCmd(),
 			[]string{"-t", constants.TableMangle, "-F", constants.ChainNodeProxyForward}),
 	}
 
@@ -168,7 +171,7 @@ func (s *Server) cleanRules() {
 
 	list := []*ExecList{
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableNat,
 				"-D", constants.ChainPrerouting,
@@ -176,14 +179,14 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableNat,
 				"-X", constants.ChainNodeProxyPrerouting,
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableNat,
 				"-D", constants.ChainPostrouting,
@@ -191,14 +194,14 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableNat,
 				"-X", constants.ChainNodeProxyPostrouting,
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainPrerouting,
@@ -206,14 +209,14 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-X", constants.ChainNodeProxyPrerouting,
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainPostrouting,
@@ -221,14 +224,14 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-X", constants.ChainNodeProxyPostrouting,
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainForward,
@@ -236,14 +239,14 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-X", constants.ChainNodeProxyForward,
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainInput,
@@ -251,14 +254,14 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-X", constants.ChainNodeProxyInput,
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-D", constants.ChainOutput,
@@ -266,7 +269,7 @@ func (s *Server) cleanRules() {
 			},
 		),
 		newExec(
-			IptablesCmd,
+			s.IptablesCmd(),
 			[]string{
 				"-t", constants.TableMangle,
 				"-X", constants.ChainNodeProxyOutput,
@@ -290,10 +293,10 @@ func newIptableRule(table, chain string, rule ...string) *iptablesRule {
 	}
 }
 
-func iptablesAppend(rules []*iptablesRule) error {
+func (s *Server) iptablesAppend(rules []*iptablesRule) error {
 	for _, rule := range rules {
 		log.Debugf("Appending rule: %+v", rule)
-		err := execute(IptablesCmd, append([]string{"-t", rule.Table, "-A", rule.Chain}, rule.RuleSpec...)...)
+		err := execute(s.IptablesCmd(), append([]string{"-t", rule.Table, "-A", rule.Chain}, rule.RuleSpec...)...)
 		if err != nil {
 			return err
 		}

@@ -13,6 +13,16 @@ const (
 	ProxyRetMask = "0x040"
 	ProxyRetMark = ProxyRetMask + "/" + ProxyRetMask
 
+	// for ebpf mode
+	TProxyMark         = 0x400
+	TProxyMask         = 0xfff
+	TProxyMarkPriority = 20000
+	OrgSrcRetMark      = 0x4d3
+	OrgSrcRetMask      = 0xfff
+	OrgSrcPriority     = 20003
+	EBPFInboundMark    = "5678"
+	EBPFOutboundMark   = "8765"
+
 	InboundTun  = "istioin"
 	OutboundTun = "istioout"
 
@@ -39,7 +49,10 @@ const (
 	TableRaw    = "raw"
 	TableFilter = "filter"
 
-	DNSCapturePort = 15053
+	DNSCapturePort                = 15053
+	NodeProxyInboundPort          = 15008
+	NodeProxyOutboundPort         = 15001
+	NodeProxyInboundPlaintextPort = 15006
 )
 
 const (

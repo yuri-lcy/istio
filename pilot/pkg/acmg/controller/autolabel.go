@@ -77,9 +77,7 @@ var labelPatch = []byte(fmt.Sprintf(
 	acmg.TypeWorkload,
 ))
 
-func (a *AutoLabel) addPodToQueue(namespace interface{}) {
-	ns := namespace.(*v1.Namespace)
-
+func (a *AutoLabel) addPodToQueue(ns *v1.Namespace) {
 	a.labeledNamespace = append(a.labeledNamespace, ns.Name)
 	pods, err := a.podLister.Pods(ns.Name).List(klabels.Everything())
 	if err != nil {
@@ -91,8 +89,8 @@ func (a *AutoLabel) addPodToQueue(namespace interface{}) {
 	}
 }
 
-func checkNamespaceLabel(ns interface{}) bool {
-	if labelValue, labelled := ns.(controllers.Object).GetLabels()["istio.io/dataplane-mode"]; labelled && labelValue == "acmg" {
+func checkNamespaceLabel(ns *v1.Namespace) bool {
+	if labelValue, labelled := ns.GetLabels()["istio.io/dataplane-mode"]; labelled && labelValue == "acmg" {
 		return true
 	}
 	return false
@@ -100,18 +98,22 @@ func checkNamespaceLabel(ns interface{}) bool {
 
 func (a *AutoLabel) labeledNamespaceInformer() *cache.ResourceEventHandlerFuncs {
 	return &cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			if checkNamespaceLabel(obj) {
-				a.addPodToQueue(obj)
+		AddFunc: func(obj any) {
+			ns := obj.(*v1.Namespace)
+			if checkNamespaceLabel(ns) {
+				a.addPodToQueue(ns)
 			}
 		},
-		UpdateFunc: func(oldObj, newObj interface{}) {
-			if checkNamespaceLabel(newObj) && !checkNamespaceLabel(oldObj) {
-				a.addPodToQueue(newObj)
+		UpdateFunc: func(oldObj, newObj any) {
+			oldNs := oldObj.(*v1.Namespace)
+			newNs := newObj.(*v1.Namespace)
+
+			if checkNamespaceLabel(newNs) && !checkNamespaceLabel(oldNs) {
+				a.addPodToQueue(newNs)
 			}
 			log.Infof("")
 		},
-		DeleteFunc: func(obj interface{}) {
+		DeleteFunc: func(obj any) {
 			return
 		},
 	}

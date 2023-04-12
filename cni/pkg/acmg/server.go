@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"istio.io/api/mesh/v1alpha1"
 	"istio.io/istio/cni/pkg/acmg/constants"
+	ebpf "istio.io/istio/cni/pkg/ebpf/server"
 	"istio.io/istio/pilot/pkg/acmg/acmgpod"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/kube/controllers"
+	"istio.io/istio/pkg/lazy"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	listerv1 "k8s.io/client-go/listers/core/v1"
@@ -32,6 +34,10 @@ type Server struct {
 	nodeProxyRunning  bool
 
 	marshalableDisabledSelectors []*metav1.LabelSelector
+
+	iptablesCommand lazy.Lazy[string]
+	redirectMode    RedirectMode
+	ebpfServer      *ebpf.RedirectServer
 }
 
 type AcmgConfigFile struct {
@@ -58,6 +64,10 @@ func NewServer(ctx context.Context, args AcmgArgs) (*Server, error) {
 		nodeProxyRunning:             false,
 		kubeClient:                   client,
 	}
+
+	s.iptablesCommand = lazy.New(func() (string, error) {
+		return s.detectIptablesCommand(), nil
+	})
 
 	// We need to find our Host IP -- is there a better way to do this?
 	h, err := GetHostIP(s.kubeClient.Kube())

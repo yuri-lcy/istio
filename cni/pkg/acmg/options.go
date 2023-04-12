@@ -44,3 +44,20 @@ type AcmgArgs struct {
 	Revision        string
 	KubeConfig      string
 }
+
+type RedirectMode int
+
+const (
+	IptablesMode RedirectMode = iota
+	EbpfMode
+)
+
+func (v RedirectMode) String() string {
+	switch v {
+	case IptablesMode:
+		return "iptables"
+	case EbpfMode:
+		return "ebpf"
+	}
+	return ""
+}
