@@ -1,6 +1,6 @@
 package server
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target bpf -cflags "-D__TARGET_ARCH_x86"  ambient_redirect ../app/ambient_redirect.bpf.c
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -target bpf -cflags "-D__TARGET_ARCH_x86"  acmg_redirect ../app/acmg_redirect.bpf.c
 //go:generate sh -c "echo '// Copyright Istio Authors' > banner.tmp"
 //go:generate sh -c "echo '//' >> banner.tmp"
 //go:generate sh -c "echo '// Licensed under the Apache License, Version 2.0 (the \"License\");' >> banner.tmp"
@@ -14,11 +14,12 @@ package server
 //go:generate sh -c "echo '// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.' >> banner.tmp"
 //go:generate sh -c "echo '// See the License for the specific language governing permissions and' >> banner.tmp"
 //go:generate sh -c "echo '// limitations under the License.\n' >> banner.tmp"
-//go:generate sh -c "cat banner.tmp ambient_redirect_bpf.go > tmp.go && mv tmp.go ambient_redirect_bpf.go && rm banner.tmp"
+//go:generate sh -c "cat banner.tmp acmg_redirect_bpf.go > tmp.go && mv tmp.go acmg_redirect_bpf.go && rm banner.tmp"
 
 import (
 	"errors"
 	"fmt"
+	"github.com/cilium/ebpf"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/florianl/go-tc"
 	"github.com/florianl/go-tc/core"
@@ -33,7 +34,7 @@ var log = istiolog.RegisterScope("ebpf", "acmg ebpf", 0)
 const (
 	FilesystemTypeBPFFS = unix.BPF_FS_MAGIC
 	MapsRoot            = "/sys/fs/bpf"
-	MapsPinpath         = "/sys/fs/bpf/ambient"
+	MapsPinpath         = "/sys/fs/bpf/acmg"
 	CaptureDNSFlag      = uint8(1 << 0)
 
 	QdiscKind            = "clsact"
@@ -52,14 +53,236 @@ var isBigEndian = native.IsBigEndian
 type RedirectServer struct {
 	redirectArgsChan             chan *RedirectArgs
 	obj                          acmg_redirectObjects
-	nodeProxyHostingressFd       uint32
-	nodeProxyHostingressProgName string
+	nodeProxyHostIngressFd       uint32
+	nodeProxyHostIngressProgName string
 	nodeProxyIngressFd           uint32
 	nodeProxyIngressProgName     string
 	inboundFd                    uint32
 	inboundProgName              string
 	outboundFd                   uint32
 	outboundProgName             string
+}
+
+// Note: this struct should be exactly the same defined in C
+// it will be encoded byte by byte into memory
+type mapInfo struct {
+	Ifindex uint32
+	MacAddr [6]byte
+	Flag    uint8
+	Pad     uint8
+}
+
+func checkOrMountBPFFSDefault() error {
+	var err error
+
+	_, err = os.Stat(MapsRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(MapsRoot, 0o755); err != nil {
+				return fmt.Errorf("unable to create bpf mount directory: %s", err)
+			}
+		}
+	}
+
+	fst := unix.Statfs_t{}
+	err = unix.Statfs(MapsRoot, &fst)
+	if err != nil {
+		return &os.PathError{Op: "statfs", Path: MapsRoot, Err: err}
+	} else if fst.Type == FilesystemTypeBPFFS {
+		return nil
+	}
+
+	err = unix.Mount(MapsRoot, MapsRoot, "bpf", 0, "")
+	if err != nil {
+		return fmt.Errorf("failed to mount %s: %s", MapsRoot, err)
+	}
+
+	return nil
+}
+
+func NewRedirectServer() *RedirectServer {
+	if err := checkOrMountBPFFSDefault(); err != nil {
+		log.Fatalf("BPF filesystem mounting on /sys/fs/bpf failed: %v", err)
+	}
+
+	if err := setLimit(); err != nil {
+		log.Fatalf("Setting limit failed: %v", err)
+	}
+
+	r := &RedirectServer{
+		redirectArgsChan: make(chan *RedirectArgs),
+	}
+
+	if err := r.initBpfObjects(); err != nil {
+		log.Fatalf("Init bpf objects failed: %v", err)
+	}
+
+	return r
+}
+
+func (r *RedirectServer) initBpfObjects() error {
+	var options ebpf.CollectionOptions
+	if _, err := os.Stat(MapsPinpath); err != nil {
+		if os.IsNotExist(err) {
+			if err := os.Mkdir(MapsPinpath, os.ModePerm); err != nil {
+				return fmt.Errorf("unable to create ambient bpf mount directory: %v", err)
+			}
+		}
+	}
+	options.Maps.PinPath = MapsPinpath
+
+	// load ebpf program
+	obj := acmg_redirectObjects{}
+	if err := loadAcmg_redirectObjects(&obj, &options); err != nil {
+		return fmt.Errorf("loading objects: %v", err)
+	}
+	r.obj = obj
+	r.nodeProxyHostIngressFd = uint32(r.obj.NodeproxyHostIngress.FD())
+	nodeProxyHostIngressInfo, err := r.obj.NodeproxyHostIngress.Info()
+	if err != nil {
+		return fmt.Errorf("unable to load metadata of bfp prog: %v", err)
+	}
+	r.nodeProxyHostIngressProgName = nodeProxyHostIngressInfo.Name
+	r.nodeProxyIngressFd = uint32(r.obj.NodeproxyIngress.FD())
+	nodeProxyIngressInfo, err := r.obj.NodeproxyIngress.Info()
+	if err != nil {
+		return fmt.Errorf("unable to load metadata of bfp prog: %v", err)
+	}
+	r.nodeProxyIngressProgName = nodeProxyIngressInfo.Name
+
+	r.inboundFd = uint32(r.obj.AppInbound.FD())
+	inboundInfo, err := r.obj.AppInbound.Info()
+	if err != nil {
+		return fmt.Errorf("unable to load metadata of bfp prog: %v", err)
+	}
+	r.inboundProgName = inboundInfo.Name
+	r.outboundFd = uint32(r.obj.AppOutbound.FD())
+	outboundInfo, err := r.obj.AppOutbound.Info()
+	if err != nil {
+		return fmt.Errorf("unable to load metadata of bfp prog: %v", err)
+	}
+	r.outboundProgName = outboundInfo.Name
+	return nil
+}
+
+func setLimit() error {
+	return unix.Setrlimit(unix.RLIMIT_MEMLOCK,
+		&unix.Rlimit{
+			Cur: unix.RLIM_INFINITY,
+			Max: unix.RLIM_INFINITY,
+		})
+}
+
+func (r *RedirectServer) Start(stop <-chan struct{}) {
+	log.Infof("Starting redirection Server")
+	go func() {
+		for {
+			select {
+			case arg := <-r.redirectArgsChan:
+				if err := r.handleRequest(arg); err != nil {
+					log.Errorf("failed to handle request: %v", err)
+				}
+
+			case <-stop:
+				r.obj.Close()
+				return
+			}
+		}
+	}()
+}
+
+func (r *RedirectServer) AcceptRequest(redirectArgs *RedirectArgs) {
+	r.redirectArgsChan <- redirectArgs
+}
+
+func (r *RedirectServer) handleRequest(args *RedirectArgs) error {
+
+}
+
+func (r *RedirectServer) attachTCForNodeProxy(ifindex, peerIndex uint32, namespace string) error {
+	// attach to nodeproxy host veth's ingress
+	if err := r.attachTC("", ifindex, "ingress", r.nodeProxyHostIngressFd, r.nodeProxyHostIngressProgName); err != nil {
+		return err
+	}
+	// attach to nodeproxy veth's ingress in POD namespace
+	if err := r.attachTC(namespace, peerIndex, "ingress", r.nodeProxyIngressFd, r.nodeProxyIngressProgName); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *RedirectServer) detachTCForNodeProxy(ifindex, peerIndex uint32, namespace string) error {
+	// delete nodeproxy veth's clsact qdisc (in host namespace)
+	if err := r.delClsactQdisc("", ifindex); err != nil {
+		return err
+	}
+	// delete nodeproxy veth's clsact qdisc (in POD namespace)
+	if err := r.delClsactQdisc(namespace, peerIndex); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *RedirectServer) detachTCForWorkload(ifindex uint32) error {
+	// delete workload veth's clsact qdisc (in host namespace)
+	if err := r.delClsactQdisc("", ifindex); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *RedirectServer) delClsactQdisc(namespace string, ifindex uint32) error {
+	config := &tc.Config{}
+	if namespace != "" {
+		nsHdlr, err := ns.GetNS(fmt.Sprintf("/var/run/netns/%s", namespace))
+		if err != nil {
+			return err
+		}
+		defer nsHdlr.Close()
+		config.NetNS = int(nsHdlr.Fd())
+	}
+	rtnl, err := tc.Open(config)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := rtnl.Close(); err != nil {
+			log.Warnf("could not close rtnetlink socket: %v", err)
+		}
+	}()
+
+	// delete clsact qdisc
+	info := tc.Object{
+		Msg: tc.Msg{
+			Family:  unix.AF_UNSPEC,
+			Ifindex: ifindex,
+			Handle:  core.BuildHandle(tc.HandleRoot, 0x0000),
+			Parent:  tc.HandleIngress,
+		},
+		Attribute: tc.Attribute{
+			Kind: QdiscKind,
+		},
+	}
+	err = rtnl.Qdisc().Delete(&info)
+	if errors.Is(err, os.ErrNotExist) {
+		log.Debugf("No qdisc configed for Ifindex: %d, %v", ifindex, err)
+		return nil
+	}
+
+	return err
+}
+
+func (r *RedirectServer) attachTCForWorkLoad(ifindex uint32) error {
+	// attach to workload host veth's egress
+	if err := r.attachTC("", ifindex, "egress", r.inboundFd, r.inboundProgName); err != nil {
+		return err
+	}
+	// attach to workload host veth's ingress
+	if err := r.attachTC("", ifindex, "ingress", r.outboundFd, r.outboundProgName); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *RedirectServer) attachTC(namespace string, ifindex uint32, direction string, fd uint32, name string) error {
