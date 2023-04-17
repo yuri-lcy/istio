@@ -7,7 +7,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 	"io/fs"
-	ebpf "istio.io/istio/cni/pkg/ebpf/server"
+	ebpf "istio.io/istio/cni/pkg/ebpf-acmg/server"
 	corev1 "k8s.io/api/core/v1"
 	"net"
 	"net/netip"

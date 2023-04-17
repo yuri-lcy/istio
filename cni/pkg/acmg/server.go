@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"istio.io/api/mesh/v1alpha1"
 	"istio.io/istio/cni/pkg/acmg/constants"
-	ebpf "istio.io/istio/cni/pkg/ebpf/server"
+	ebpf "istio.io/istio/cni/pkg/ebpf-acmg/server"
 	"istio.io/istio/pilot/pkg/acmg/acmgpod"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pkg/kube"
