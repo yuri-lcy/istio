@@ -36,6 +36,7 @@ const (
 	LogUDSAddress        = "log-uds-address"
 	AmbientEnabled       = "ambient-enabled"
 	AcmgEnabled          = "acmg-enabled"
+	EbpfEnabled          = "ebpf-enabled"
 
 	// Repair
 	RepairEnabled            = "repair-enabled"

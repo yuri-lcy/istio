@@ -28,6 +28,7 @@ import (
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	"github.com/golang/protobuf/ptypes/duration"
+	"google.golang.org/protobuf/proto"
 	anypb "google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -59,16 +60,20 @@ var istioMtlsTransportSocketMatch = &structpb.Struct{
 	},
 }
 
-var hboneTransportSocketMatch = &structpb.Struct{
-	Fields: map[string]*structpb.Value{
-		model.TunnelLabelShortName: {Kind: &structpb.Value_StringValue{StringValue: model.TunnelHTTP}},
+var hboneTransportSocket = &cluster.Cluster_TransportSocketMatch{
+	Name: "hbone",
+	Match: &structpb.Struct{
+		Fields: map[string]*structpb.Value{
+			model.TunnelLabelShortName: {Kind: &structpb.Value_StringValue{StringValue: model.TunnelHTTP}},
+		},
 	},
+	TransportSocket: InternalUpstreamSocket,
 }
 
-// PassthroughHttpProtocolOptions are http protocol options used for pass through clusters.
+// passthroughHttpProtocolOptions are http protocol options used for pass through clusters.
 // nolint
 // revive:disable-next-line
-var PassthroughHttpProtocolOptions = protoconv.MessageToAny(&http.HttpProtocolOptions{
+var passthroughHttpProtocolOptions = protoconv.MessageToAny(&http.HttpProtocolOptions{
 	CommonHttpProtocolOptions: &core.HttpProtocolOptions{
 		IdleTimeout: durationpb.New(5 * time.Minute),
 	},
@@ -122,29 +127,29 @@ type ClusterBuilder struct {
 	credentialSocketExist bool
 
 	// TODO: this is not safe since its not in cache
-	proxy *model.Proxy
+	unsafeWaypointOnlyProxy *model.Proxy
 }
 
 // NewClusterBuilder builds an instance of ClusterBuilder.
 func NewClusterBuilder(proxy *model.Proxy, req *model.PushRequest, cache model.XdsCache) *ClusterBuilder {
 	cb := &ClusterBuilder{
-		serviceInstances:   proxy.ServiceInstances,
-		proxyID:            proxy.ID,
-		proxyType:          proxy.Type,
-		proxyVersion:       proxy.Metadata.IstioVersion,
-		sidecarScope:       proxy.SidecarScope,
-		passThroughBindIPs: getPassthroughBindIPs(proxy.GetIPMode()),
-		supportsIPv4:       proxy.SupportsIPv4(),
-		supportsIPv6:       proxy.SupportsIPv6(),
-		hbone:              proxy.EnableHBONE() || proxy.IsWaypointProxy(),
-		locality:           proxy.Locality,
-		proxyLabels:        proxy.Labels,
-		proxyView:          proxy.GetView(),
-		proxyIPAddresses:   proxy.IPAddresses,
-		configNamespace:    proxy.ConfigNamespace,
-		req:                req,
-		cache:              cache,
-		proxy:              proxy,
+		serviceInstances:        proxy.ServiceInstances,
+		proxyID:                 proxy.ID,
+		proxyType:               proxy.Type,
+		proxyVersion:            proxy.Metadata.IstioVersion,
+		sidecarScope:            proxy.SidecarScope,
+		passThroughBindIPs:      getPassthroughBindIPs(proxy.GetIPMode()),
+		supportsIPv4:            proxy.SupportsIPv4(),
+		supportsIPv6:            proxy.SupportsIPv6(),
+		hbone:                   proxy.EnableHBONE() || proxy.IsWaypointProxy(),
+		locality:                proxy.Locality,
+		proxyLabels:             proxy.Labels,
+		proxyView:               proxy.GetView(),
+		proxyIPAddresses:        proxy.IPAddresses,
+		configNamespace:         proxy.ConfigNamespace,
+		req:                     req,
+		cache:                   cache,
+		unsafeWaypointOnlyProxy: proxy,
 	}
 	if proxy.Metadata != nil {
 		if proxy.Metadata.TLSClientCertChain != "" {
@@ -449,7 +454,6 @@ func (cb *ClusterBuilder) buildInboundClusterForPortOrUDS(clusterPort int, bind 
 	}
 	localCluster := cb.buildDefaultCluster(clusterName, clusterType, localityLbEndpoints,
 		model.TrafficDirectionInbound, instance.ServicePort, instance.Service, allInstance)
-
 	// If stat name is configured, build the alt statname.
 	if len(cb.req.Push.Mesh.InboundClusterStatName) != 0 {
 		localCluster.cluster.AltStatName = telemetry.BuildStatPrefix(cb.req.Push.Mesh.InboundClusterStatName,
@@ -566,24 +570,16 @@ func (cb *ClusterBuilder) buildLocalityLbEndpoints(proxyView model.ProxyView, se
 			Metadata: &core.Metadata{},
 		}
 
-		labels := instance.Endpoint.Labels
-		ns := instance.Endpoint.Namespace
+		metadata := instance.Endpoint.Metadata()
 		if features.CanonicalServiceForMeshExternalServiceEntry && service.MeshExternal {
-			ns = service.Attributes.Namespace
+			metadata.Namespace = service.Attributes.Namespace
 			svcLabels := service.Attributes.Labels
 			if _, ok := svcLabels[model.IstioCanonicalServiceLabelName]; ok {
-				labels = map[string]string{
-					model.IstioCanonicalServiceLabelName:         svcLabels[model.IstioCanonicalServiceLabelName],
-					model.IstioCanonicalServiceRevisionLabelName: svcLabels[model.IstioCanonicalServiceRevisionLabelName],
-				}
-				for k, v := range instance.Endpoint.Labels {
-					labels[k] = v
-				}
+				metadata.Labels[model.IstioCanonicalServiceLabelName] = svcLabels[model.IstioCanonicalServiceLabelName]
+				metadata.Labels[model.IstioCanonicalServiceRevisionLabelName] = svcLabels[model.IstioCanonicalServiceRevisionLabelName]
 			}
 		}
-
-		util.BuildLbEndpointMetadata(instance.Endpoint.Network, instance.Endpoint.TLSMode, instance.Endpoint.WorkloadName,
-			ns, instance.Endpoint.Locality.ClusterID, labels, ep.Metadata)
+		util.AppendLbEndpointMetadata(metadata, ep.Metadata)
 
 		locality := instance.Endpoint.Locality.Label
 		lbEndpoints[locality] = append(lbEndpoints[locality], ep)
@@ -670,7 +666,7 @@ func (cb *ClusterBuilder) buildBlackHoleCluster() *cluster.Cluster {
 	c := &cluster.Cluster{
 		Name:                 util.BlackHoleCluster,
 		ClusterDiscoveryType: &cluster.Cluster_Type{Type: cluster.Cluster_STATIC},
-		ConnectTimeout:       cb.req.Push.Mesh.ConnectTimeout,
+		ConnectTimeout:       proto.Clone(cb.req.Push.Mesh.ConnectTimeout).(*durationpb.Duration),
 		LbPolicy:             cluster.Cluster_ROUND_ROBIN,
 	}
 	return c
@@ -682,10 +678,10 @@ func (cb *ClusterBuilder) buildDefaultPassthroughCluster() *cluster.Cluster {
 	cluster := &cluster.Cluster{
 		Name:                 util.PassthroughCluster,
 		ClusterDiscoveryType: &cluster.Cluster_Type{Type: cluster.Cluster_ORIGINAL_DST},
-		ConnectTimeout:       cb.req.Push.Mesh.ConnectTimeout,
+		ConnectTimeout:       proto.Clone(cb.req.Push.Mesh.ConnectTimeout).(*durationpb.Duration),
 		LbPolicy:             cluster.Cluster_CLUSTER_PROVIDED,
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
-			v3.HttpProtocolOptionsType: PassthroughHttpProtocolOptions,
+			v3.HttpProtocolOptionsType: passthroughHttpProtocolOptions,
 		},
 	}
 	cb.applyConnectionPool(cb.req.Push.Mesh, NewMutableCluster(cluster), &networking.ConnectionPoolSettings{})
@@ -867,7 +863,7 @@ func (cb *ClusterBuilder) buildIstioMutualTLS(san []string, sni string) *network
 }
 
 func (cb *ClusterBuilder) applyDefaultConnectionPool(cluster *cluster.Cluster) {
-	cluster.ConnectTimeout = cb.req.Push.Mesh.ConnectTimeout
+	cluster.ConnectTimeout = proto.Clone(cb.req.Push.Mesh.ConnectTimeout).(*durationpb.Duration)
 }
 
 // FIXME: there isn't a way to distinguish between unset values and zero values
@@ -1000,11 +996,7 @@ func (cb *ClusterBuilder) applyHBONETransportSocketMatches(c *cluster.Cluster, t
 			transportSocket := c.TransportSocket
 			c.TransportSocket = nil
 			c.TransportSocketMatches = []*cluster.Cluster_TransportSocketMatch{
-				{
-					Name:            "hbone",
-					Match:           hboneTransportSocketMatch,
-					TransportSocket: InternalUpstreamSocket,
-				},
+				hboneTransportSocket,
 				{
 					Name:            "tlsMode-" + model.IstioMutualTLSModeLabel,
 					Match:           istioMtlsTransportSocketMatch,
@@ -1020,11 +1012,7 @@ func (cb *ClusterBuilder) applyHBONETransportSocketMatches(c *cluster.Cluster, t
 				c.TransportSocket = nil
 
 				c.TransportSocketMatches = []*cluster.Cluster_TransportSocketMatch{
-					{
-						Name:            "hbone",
-						Match:           hboneTransportSocketMatch,
-						TransportSocket: InternalUpstreamSocket,
-					},
+					hboneTransportSocket,
 					{
 						Name:            "tlsMode-" + model.IstioMutualTLSModeLabel,
 						TransportSocket: ts,
@@ -1128,6 +1116,8 @@ func (cb *ClusterBuilder) buildUpstreamClusterTLSContext(opts *buildClusterOpts,
 			}
 		}
 
+		applyTLSDefaults(tlsContext, opts.mesh.GetTlsDefaults())
+
 		if cb.isHttp2Cluster(c) {
 			// This is HTTP/2 cluster, advertise it with ALPN.
 			tlsContext.CommonTlsContext.AlpnProtocols = util.ALPNH2Only
@@ -1181,12 +1171,24 @@ func (cb *ClusterBuilder) buildUpstreamClusterTLSContext(opts *buildClusterOpts,
 			}
 		}
 
+		applyTLSDefaults(tlsContext, opts.mesh.GetTlsDefaults())
+
 		if cb.isHttp2Cluster(c) {
 			// This is HTTP/2 cluster, advertise it with ALPN.
 			tlsContext.CommonTlsContext.AlpnProtocols = util.ALPNH2Only
 		}
 	}
 	return tlsContext, nil
+}
+
+// applyTLSDefaults applies tls default settings from mesh config to UpstreamTlsContext.
+func applyTLSDefaults(tlsContext *auth.UpstreamTlsContext, tlsDefaults *meshconfig.MeshConfig_TLSConfig) {
+	if tlsDefaults == nil {
+		return
+	}
+	if len(tlsDefaults.EcdhCurves) > 0 {
+		tlsContext.CommonTlsContext.TlsParams.EcdhCurves = tlsDefaults.EcdhCurves
+	}
 }
 
 // Set auto_sni if EnableAutoSni feature flag is enabled and if sni field is not explicitly set in DR.
@@ -1235,12 +1237,7 @@ func (cb *ClusterBuilder) setUseDownstreamProtocol(mc *MutableCluster) {
 }
 
 func http2ProtocolOptions() *core.Http2ProtocolOptions {
-	return &core.Http2ProtocolOptions{
-		// Large values lead to internal listener crashes
-		// TODO: find a way to scope this to internal listeners or not crash
-		MaxConcurrentStreams:    wrappers.UInt32(1073741824),
-		InitialStreamWindowSize: wrappers.UInt32(16777216),
-	}
+	return &core.Http2ProtocolOptions{}
 }
 
 // nolint
@@ -1302,14 +1299,14 @@ func (cb *ClusterBuilder) getAllCachedSubsetClusters(clusterKey clusterCache) ([
 	}
 	destinationRule := CastDestinationRule(clusterKey.destinationRule.GetRule())
 	res := make([]*discovery.Resource, 0, 1+len(destinationRule.GetSubsets()))
-	cachedCluster, f := cb.cache.Get(&clusterKey)
-	allFound := f
+	cachedCluster := cb.cache.Get(&clusterKey)
+	allFound := cachedCluster != nil
 	res = append(res, cachedCluster)
 	dir, _, host, port := model.ParseSubsetKey(clusterKey.clusterName)
 	for _, ss := range destinationRule.GetSubsets() {
 		clusterKey.clusterName = model.BuildSubsetKey(dir, ss.Name, host, port)
-		cachedCluster, f := cb.cache.Get(&clusterKey)
-		if !f {
+		cachedCluster := cb.cache.Get(&clusterKey)
+		if cachedCluster == nil {
 			allFound = false
 		}
 		res = append(res, cachedCluster)
@@ -1414,7 +1411,7 @@ func (cb *ClusterBuilder) buildExternalSDSCluster(addr string) *cluster.Cluster 
 	c := &cluster.Cluster{
 		Name:                 security.SDSExternalClusterName,
 		ClusterDiscoveryType: &cluster.Cluster_Type{Type: cluster.Cluster_STATIC},
-		ConnectTimeout:       cb.req.Push.Mesh.ConnectTimeout,
+		ConnectTimeout:       proto.Clone(cb.req.Push.Mesh.ConnectTimeout).(*durationpb.Duration),
 		LoadAssignment: &endpoint.ClusterLoadAssignment{
 			ClusterName: security.SDSExternalClusterName,
 			Endpoints: []*endpoint.LocalityLbEndpoints{

@@ -119,15 +119,12 @@ func (lb *ListenerBuilder) WithAcmgWorkload(wl acmg.Workload) *ListenerBuilder {
 func (lb *ListenerBuilder) appendSidecarInboundListeners() *ListenerBuilder {
 	if lb.node.IsCoreProxy() {
 		lb.inboundListeners = lb.buildCoreProxyInbound()
-	} else if lb.node.IsWaypointProxy() {
-		lb.inboundListeners = lb.buildWaypointInbound()
 	} else {
 		lb.inboundListeners = lb.buildInboundListeners()
 		if lb.node.EnableHBONE() {
 			lb.inboundListeners = append(lb.inboundListeners, lb.buildInboundHBONEListeners()...)
 		}
 	}
-
 	return lb
 }
 
@@ -422,9 +419,7 @@ func (lb *ListenerBuilder) buildHTTPConnectionManager(httpOpts *httpListenerOpts
 		filters = append(filters, xdsfilters.GrpcWeb)
 	}
 
-	if httpOpts.protocol.IsGRPC() {
-		filters = append(filters, xdsfilters.GrpcStats)
-	}
+	filters = append(filters, xdsfilters.GrpcStats)
 
 	// append ALPN HTTP filter in HTTP connection manager for outbound listener only.
 	if features.ALPNFilter {

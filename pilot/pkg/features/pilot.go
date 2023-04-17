@@ -499,7 +499,7 @@ var (
 
 	SpiffeBundleEndpoints = env.Register("SPIFFE_BUNDLE_ENDPOINTS", "",
 		"The SPIFFE bundle trust domain to endpoint mappings. Istiod retrieves the root certificate from each SPIFFE "+
-			"bundle endpoint and uses it to verify client certifiates from that trust domain. The endpoint must be "+
+			"bundle endpoint and uses it to verify client certificates from that trust domain. The endpoint must be "+
 			"compliant to the SPIFFE Bundle Endpoint standard. For details, please refer to "+
 			"https://github.com/spiffe/spiffe/blob/master/standards/SPIFFE_Trust_Domain_and_Bundle.md . "+
 			"No need to configure this for root certificates issued via Istiod or web-PKI based root certificates. "+
@@ -524,6 +524,9 @@ var (
 
 	XDSCacheMaxSize = env.Register("PILOT_XDS_CACHE_SIZE", 60000,
 		"The maximum number of cache entries for the XDS cache.").Get()
+
+	XDSCacheIndexClearInterval = env.Register("PILOT_XDS_CACHE_INDEX_CLEAR_INTERVAL", 5*time.Second,
+		"The interval for xds cache index clearing.").Get()
 
 	// Note: while this appears unused in the go code, this sets a default which is used in the injection template.
 	EnableLegacyFSGroupInjection = env.Register("ENABLE_LEGACY_FSGROUP_INJECTION", false,
@@ -604,13 +607,14 @@ var (
 	// Warning: do not enable by default until endpoint_builder.go caching is fixed (and possibly other locations).
 	EnableHBONE = env.Register(
 		"PILOT_ENABLE_HBONE",
-		true,
+		false,
 		"If enabled, HBONE support can be configured for proxies. "+
 			"Note: proxies must opt in on a per-proxy basis with ENABLE_HBONE to actually get HBONE config, in addition to this flag.").Get()
 
-	StripHostPort = env.Register("ISTIO_GATEWAY_STRIP_HOST_PORT", false,
-		"If enabled, Gateway will remove any port from host/authority header "+
-			"before any processing of request by HTTP filters or routing. Deprecated: in Istio 1.15+ port is ignored in domain matching.").Get()
+	EnableAmbientControllers = env.Register(
+		"PILOT_ENABLE_AMBIENT_CONTROLLERS",
+		false,
+		"If enabled, controllers required for ambient will run. This is required to run ambient mesh.").Get()
 
 	// EnableUnsafeAssertions enables runtime checks to test assertions in our code. This should never be enabled in
 	// production; when assertions fail Istio will panic.
@@ -633,6 +637,10 @@ var (
 	DeltaXds = env.Register("ISTIO_DELTA_XDS", false,
 		"If enabled, pilot will only send the delta configs as opposed to the state of the world on a "+
 			"Resource Request. This feature uses the delta xds api, but does not currently send the actual deltas.").Get()
+
+	MetadataDiscovery = env.Register("ISTIO_METADATA_DISCOVERY",
+		false,
+		"Enables proxy discovery of the workload metadata to back-fill the telemetry reports.").Get()
 
 	PartialFullPushes = env.Register("PILOT_PARTIAL_FULL_PUSHES", true,
 		"If enabled, pilot will send partial pushes in for child resources (RDS, EDS, etc) when possible. "+
@@ -671,7 +679,7 @@ var (
 
 	AutoReloadPluginCerts = env.Register(
 		"AUTO_RELOAD_PLUGIN_CERTS",
-		false,
+		true,
 		"If enabled, if user introduces new intermediate plug-in CA, user need not to restart istiod to pick up certs."+
 			"Istiod picks newly added intermediate plug-in CA certs and updates it. Plug-in new Root-CA not supported.").Get()
 
@@ -741,6 +749,14 @@ var (
 
 	EnableOptimizedServicePush = env.RegisterBoolVar("ISTIO_ENABLE_OPTIMIZED_SERVICE_PUSH", true,
 		"If enabled, Istiod will not push changes on arbitraty annotation change.").Get()
+
+	InformerWatchNamespace = env.Register("ISTIO_WATCH_NAMESPACE", "",
+		"If set, limit Kubernetes watches to a single namespace. "+
+			"Warning: only a single namespace can be set.").Get()
+
+	// This is a feature flag, can be removed if protobuf proves universally better.
+	KubernetesClientContentType = env.Register("ISTIO_KUBE_CLIENT_CONTENT_TYPE", "protobuf",
+		"The content type to use for Kubernetes clients. Defaults to protobuf. Valid options: [protobuf, json]").Get()
 )
 
 // EnableEndpointSliceController returns the value of the feature flag and whether it was actually specified.
@@ -752,9 +768,3 @@ func EnableEndpointSliceController() (value bool, ok bool) {
 func UnsafeFeaturesEnabled() bool {
 	return EnableUnsafeAdminEndpoints || EnableUnsafeAssertions
 }
-
-var AmbientAutolabelIgnore = env.RegisterStringVar("AMBIENT_AUTOLABEL_IGNORE", "istio-system,metallb-system,kube-system",
-	"ignored namespaces").Get()
-
-var AcmgAutolabelIgnore = env.RegisterStringVar("ACMG_AUTOLABEL_IGNORE", "istio-system,metallb-system,kube-system",
-	"ignored namespaces").Get()

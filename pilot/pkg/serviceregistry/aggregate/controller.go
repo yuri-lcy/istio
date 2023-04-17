@@ -15,10 +15,12 @@
 package aggregate
 
 import (
+	"net/netip"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/types"
 
+	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/serviceregistry"
 	"istio.io/istio/pilot/pkg/serviceregistry/provider"
@@ -54,8 +56,33 @@ type Controller struct {
 	model.NetworkGatewaysHandler
 }
 
+func (c *Controller) Waypoint(scope model.WaypointScope) sets.Set[netip.Addr] {
+	res := sets.New[netip.Addr]()
+	if !features.EnableAmbientControllers {
+		return res
+	}
+	for _, p := range c.GetRegistries() {
+		res = res.Merge(p.Waypoint(scope))
+	}
+	return res
+}
+
+func (c *Controller) WorkloadsForWaypoint(scope model.WaypointScope) []*model.WorkloadInfo {
+	res := []*model.WorkloadInfo{}
+	if !features.EnableAmbientControllers {
+		return res
+	}
+	for _, p := range c.GetRegistries() {
+		res = append(res, p.WorkloadsForWaypoint(scope)...)
+	}
+	return res
+}
+
 func (c *Controller) AdditionalPodSubscriptions(proxy *model.Proxy, addr, cur sets.Set[types.NamespacedName]) sets.Set[types.NamespacedName] {
 	res := sets.New[types.NamespacedName]()
+	if !features.EnableAmbientControllers {
+		return res
+	}
 	for _, p := range c.GetRegistries() {
 		res = res.Merge(p.AdditionalPodSubscriptions(proxy, addr, cur))
 	}
@@ -64,23 +91,21 @@ func (c *Controller) AdditionalPodSubscriptions(proxy *model.Proxy, addr, cur se
 
 func (c *Controller) Policies(requested sets.Set[model.ConfigKey]) []*workloadapi.Authorization {
 	res := []*workloadapi.Authorization{}
+	if !features.EnableAmbientControllers {
+		return res
+	}
 	for _, p := range c.GetRegistries() {
 		res = append(res, p.Policies(requested)...)
 	}
 	return res
 }
 
-func (c *Controller) AmbientSnapshot() *model.AmbientSnapshot {
-	m := &model.AmbientSnapshot{}
-	for _, p := range c.GetRegistries() {
-		m = m.Merge(p.AmbientSnapshot())
-	}
-	return m
-}
-
 func (c *Controller) PodInformation(addresses sets.Set[types.NamespacedName]) ([]*model.WorkloadInfo, []string) {
 	i := []*model.WorkloadInfo{}
 	removed := sets.New[string]()
+	if !features.EnableAmbientControllers {
+		return i, []string{}
+	}
 	for _, p := range c.GetRegistries() {
 		wis, r := p.PodInformation(addresses)
 		i = append(i, wis...)

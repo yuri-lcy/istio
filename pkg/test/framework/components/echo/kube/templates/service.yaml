@@ -33,8 +33,5 @@ spec:
     port: {{ $p.ServicePort }}
     targetPort: {{ $p.WorkloadPort }}
 {{- end }}
-  {{- if .Ambient }}
-  type: LoadBalancer
-  {{- end }}
   selector:
     app: {{ .Service }}

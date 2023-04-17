@@ -21,15 +21,17 @@ import (
 
 	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	corev1 "k8s.io/api/core/v1"
-	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"istio.io/api/security/v1beta1"
+	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
 	v3 "istio.io/istio/pilot/pkg/xds/v3"
 	"istio.io/istio/pkg/config"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/config/schema/gvk"
+	"istio.io/istio/pkg/kube/kclient/clienttest"
+	"istio.io/istio/pkg/test"
 	"istio.io/istio/pkg/test/util/assert"
 	"istio.io/istio/pkg/util/sets"
 )
@@ -65,6 +67,7 @@ func buildExpectExpectRemoved(t *testing.T) func(resp *discovery.DeltaDiscoveryR
 }
 
 func TestWorkloadReconnect(t *testing.T) {
+	test.SetForTest(t, &features.EnableAmbientControllers, true)
 	expect := buildExpect(t)
 	s := NewFakeDiscoveryServer(t, FakeOptions{})
 	ads := s.ConnectDeltaADS().WithType(v3.WorkloadType).WithMetadata(model.NodeMetadata{NodeName: "node"})
@@ -95,6 +98,7 @@ func TestWorkloadReconnect(t *testing.T) {
 }
 
 func TestWorkload(t *testing.T) {
+	test.SetForTest(t, &features.EnableAmbientControllers, true)
 	t.Run("ondemand", func(t *testing.T) {
 		expect := buildExpect(t)
 		expectRemoved := buildExpectExpectRemoved(t)
@@ -253,18 +257,9 @@ func createPod(s *FakeDiscoveryServer, name string, sa string, ip string, node s
 			},
 		},
 	}
-	_, err := s.kubeClient.Kube().CoreV1().Pods("default").Create(context.Background(), pod, metav1.CreateOptions{})
-	if err != nil {
-		if kerrors.IsAlreadyExists(err) {
-			_, err = s.kubeClient.Kube().CoreV1().Pods("default").Update(context.Background(), pod, metav1.UpdateOptions{})
-		}
-		if err != nil {
-			s.t.Fatal(err)
-		}
-	}
-	if _, err := s.kubeClient.Kube().CoreV1().Pods(pod.Namespace).UpdateStatus(context.TODO(), pod, metav1.UpdateOptions{}); err != nil {
-		s.t.Fatalf("Cannot update status %s: %v", pod.ObjectMeta.Name, err)
-	}
+	pods := clienttest.NewWriter[*corev1.Pod](s.t, s.kubeClient)
+	pods.CreateOrUpdate(pod)
+	pods.UpdateStatus(pod)
 }
 
 // nolint: unparam
@@ -286,18 +281,12 @@ func createService(s *FakeDiscoveryServer, name, namespace string, selector map[
 		},
 	}
 
-	_, err := s.kubeClient.Kube().CoreV1().Services(namespace).Create(context.TODO(), service, metav1.CreateOptions{})
-	if err != nil {
-		if kerrors.IsAlreadyExists(err) {
-			_, err = s.kubeClient.Kube().CoreV1().Services(namespace).Update(context.TODO(), service, metav1.UpdateOptions{})
-		}
-		if err != nil {
-			s.t.Fatalf("Cannot create service %s in namespace %s (error: %v)", name, namespace, err)
-		}
-	}
+	svcs := clienttest.NewWriter[*corev1.Service](s.t, s.kubeClient)
+	svcs.CreateOrUpdate(service)
 }
 
 func TestWorkloadRBAC(t *testing.T) {
+	test.SetForTest(t, &features.EnableAmbientControllers, true)
 	expect := buildExpect(t)
 	expectRemoved := buildExpectExpectRemoved(t)
 	s := NewFakeDiscoveryServer(t, FakeOptions{})

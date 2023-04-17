@@ -37,11 +37,11 @@ import (
 	"istio.io/istio/pilot/pkg/features"
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/model/status"
-	networkutils "istio.io/istio/pilot/pkg/networking/util"
 	"istio.io/istio/pilot/pkg/serviceregistry"
 	"istio.io/istio/pilot/pkg/serviceregistry/aggregate"
 	kubecontroller "istio.io/istio/pilot/pkg/serviceregistry/kube/controller"
 	"istio.io/istio/pilot/pkg/serviceregistry/serviceentry"
+	"istio.io/istio/pilot/pkg/serviceregistry/util/xdsfake"
 	"istio.io/istio/pilot/pkg/xds"
 	"istio.io/istio/pilot/test/util"
 	"istio.io/istio/pilot/test/xdstest"
@@ -61,16 +61,12 @@ func setupTest(t *testing.T) (
 	*serviceentry.Controller,
 	model.ConfigStoreController,
 	kubernetes.Interface,
-	*xds.FakeXdsUpdater,
+	*xdsfake.Updater,
 ) {
 	t.Helper()
 	client := kubeclient.NewFakeClient()
 
-	eventch := make(chan xds.FakeXdsEvent, 100)
-
-	xdsUpdater := &xds.FakeXdsUpdater{
-		Events: eventch,
-	}
+	xdsUpdater := xdsfake.NewFakeXDS()
 	meshWatcher := mesh.NewFixedWatcher(&meshconfig.MeshConfig{})
 	kc := kubecontroller.NewController(
 		client,
@@ -215,23 +211,23 @@ func TestWorkloadInstances(t *testing.T) {
 	t.Run("Kubernetes pod labels update", func(t *testing.T) {
 		_, _, _, kube, xdsUpdater := setupTest(t)
 		makeService(t, kube, service)
-		xdsUpdater.WaitOrFail(t, "svcupdate")
+		xdsUpdater.WaitOrFail(t, "service")
 		makePod(t, kube, pod)
-		xdsUpdater.WaitOrFail(t, "proxy update")
+		xdsUpdater.WaitOrFail(t, "proxy")
 		newPod := pod.DeepCopy()
 		newPod.Labels["newlabel"] = "new"
 		makePod(t, kube, newPod)
-		xdsUpdater.WaitOrFail(t, "proxy update")
+		xdsUpdater.WaitOrFail(t, "proxy")
 	})
 
 	t.Run("Kubernetes only: headless service", func(t *testing.T) {
 		kc, _, _, kube, xdsUpdater := setupTest(t)
 		makeService(t, kube, headlessService)
-		xdsUpdater.WaitOrFail(t, "svcupdate")
+		xdsUpdater.WaitOrFail(t, "service")
 		makePod(t, kube, pod)
 		createEndpoints(t, kube, service.Name, namespace, []v1.EndpointPort{{Name: "http", Port: 80}}, []string{pod.Status.PodIP})
 		xdsUpdater.WaitOrFail(t, "eds")
-		xdsUpdater.WaitOrFail(t, "xds")
+		xdsUpdater.WaitOrFail(t, "xds full")
 		instances := []ServiceInstanceResponse{{
 			Hostname:   expectedSvc.Hostname,
 			Namestring: expectedSvc.Attributes.Namespace,
@@ -242,15 +238,15 @@ func TestWorkloadInstances(t *testing.T) {
 	})
 
 	t.Run("Kubernetes only: endpoint occur earlier", func(t *testing.T) {
-		kc, _, _, kube, xdsUpdater := setupTest(t)
+		kc, _, _, kube, fx := setupTest(t)
 		makePod(t, kube, pod)
 
 		createEndpoints(t, kube, service.Name, namespace, []v1.EndpointPort{{Name: "http", Port: 80}}, []string{pod.Status.PodIP})
-		waitForEdsUpdate(t, xdsUpdater, 1)
+		waitForEdsUpdate(t, fx, 1)
 
 		// make service populated later than endpoint
 		makeService(t, kube, service)
-		waitForEdsUpdate(t, xdsUpdater, 1)
+		fx.WaitOrFail(t, "eds cache")
 
 		instances := []ServiceInstanceResponse{{
 			Hostname:   expectedSvc.Hostname,
@@ -460,21 +456,14 @@ func TestWorkloadInstances(t *testing.T) {
 	})
 
 	t.Run("Service selects WorkloadEntry: wle occur earlier", func(t *testing.T) {
-		kc, _, store, kube, xdsUpdater := setupTest(t)
+		kc, _, store, kube, fx := setupTest(t)
 		makeIstioObject(t, store, workloadEntry)
 		// 	Other than proxy update, no event pushed when workload entry created as no service entry
-		xdsUpdater.WaitOrFail(t, "proxy update")
-		select {
-		case ev := <-xdsUpdater.Events:
-			t.Fatalf("Got %s event, expect none", ev.Kind)
-		case <-time.After(40 * time.Millisecond):
-		}
+		fx.WaitOrFail(t, "proxy")
+		fx.AssertEmpty(t, 40*time.Millisecond)
 
 		makeService(t, kube, service)
-		event := xdsUpdater.WaitOrFail(t, "edscache")
-		if event.Endpoints != 1 {
-			t.Errorf("expecting 1 endpoints, but got %d ", event.Endpoints)
-		}
+		fx.MatchOrFail(t, xdsfake.Event{Type: "eds cache", EndpointCount: 1})
 
 		instances := []ServiceInstanceResponse{{
 			Hostname:   expectedSvc.Hostname,
@@ -488,7 +477,7 @@ func TestWorkloadInstances(t *testing.T) {
 	t.Run("Service selects both pods and WorkloadEntry", func(t *testing.T) {
 		kc, _, store, kube, xdsUpdater := setupTest(t)
 		makeService(t, kube, service)
-		xdsUpdater.WaitOrFail(t, "svcupdate")
+		xdsUpdater.WaitOrFail(t, "service")
 
 		makeIstioObject(t, store, workloadEntry)
 		xdsUpdater.WaitOrFail(t, "eds")
@@ -515,23 +504,19 @@ func TestWorkloadInstances(t *testing.T) {
 	})
 
 	t.Run("Service selects both pods and WorkloadEntry: wle occur earlier", func(t *testing.T) {
-		kc, _, store, kube, xdsUpdater := setupTest(t)
+		kc, _, store, kube, fx := setupTest(t)
 		makeIstioObject(t, store, workloadEntry)
 
 		// 	Other than proxy update, no event pushed when workload entry created as no service entry
-		xdsUpdater.WaitOrFail(t, "proxy update")
-		select {
-		case ev := <-xdsUpdater.Events:
-			t.Fatalf("Got %s event, expect none", ev.Kind)
-		case <-time.After(200 * time.Millisecond):
-		}
+		fx.WaitOrFail(t, "proxy")
+		fx.AssertEmpty(t, 200*time.Millisecond)
 
 		makePod(t, kube, pod)
 		createEndpoints(t, kube, service.Name, namespace, []v1.EndpointPort{{Name: "http", Port: 80}}, []string{pod.Status.PodIP})
-		waitForEdsUpdate(t, xdsUpdater, 1)
+		waitForEdsUpdate(t, fx, 1)
 
 		makeService(t, kube, service)
-		waitForEdsUpdate(t, xdsUpdater, 2)
+		fx.WaitOrFail(t, "eds cache")
 
 		instances := []ServiceInstanceResponse{
 			{
@@ -865,6 +850,8 @@ func TestWorkloadInstances(t *testing.T) {
 		expectEndpoints(t, s, "outbound|80||service.namespace.svc.cluster.local", nil, nil)
 	})
 
+	istiotest.SetForTest(t, &features.EnableHBONE, true)
+	istiotest.SetForTest(t, &features.EnableAmbientControllers, true)
 	for _, ambient := range []bool{false, true} {
 		name := "disabled"
 		if ambient {
@@ -877,7 +864,7 @@ func TestWorkloadInstances(t *testing.T) {
 			pod = pod.DeepCopy()
 			pod.Annotations[constants.AmbientRedirection] = constants.AmbientRedirectionEnabled
 		}
-		opts := xds.FakeOptions{DisableAmbient: !ambient, MeshConfig: m}
+		opts := xds.FakeOptions{MeshConfig: m}
 		t.Run("ambient "+name, func(t *testing.T) {
 			t.Run("ServiceEntry selects Pod: update service entry", func(t *testing.T) {
 				s := xds.NewFakeDiscoveryServer(t, opts)
@@ -992,7 +979,7 @@ func expectAmbient(strings []string, ambient bool) []string {
 	}
 	var out []string
 	for _, s := range strings {
-		out = append(out, networkutils.OutboundTunnel+";"+s)
+		out = append(out, "connect_originate;"+s)
 	}
 	return out
 }
@@ -1015,15 +1002,9 @@ func setHealth(cfg config.Config, healthy bool) config.Config {
 	})
 }
 
-func waitForEdsUpdate(t *testing.T, xdsUpdater *xds.FakeXdsUpdater, expected int) {
+func waitForEdsUpdate(t *testing.T, xdsUpdater *xdsfake.Updater, expected int) {
 	t.Helper()
-	retry.UntilSuccessOrFail(t, func() error {
-		event := xdsUpdater.WaitOrFail(t, "eds", "edscache")
-		if event.Endpoints != expected {
-			return fmt.Errorf("expecting %d endpoints, but got %d", expected, event.Endpoints)
-		}
-		return nil
-	}, retry.Delay(time.Millisecond*10), retry.Timeout(time.Second))
+	xdsUpdater.MatchOrFail(t, xdsfake.Event{Type: "eds", EndpointCount: expected})
 }
 
 func TestEndpointsDeduping(t *testing.T) {
@@ -1098,6 +1079,7 @@ func TestEndpointsDeduping(t *testing.T) {
 			LabelSelectors: labels,
 		},
 	}, 80, []ServiceInstanceResponse{})
+	retry.UntilSuccessOrFail(t, s.AssertEndpointConsistency, retry.Converge(2), retry.Timeout(time.Second*2), retry.Delay(time.Millisecond*10))
 }
 
 // TestEndpointSlicingServiceUpdate is a regression test to ensure we do not end up with duplicate endpoints when a service changes.
@@ -1130,11 +1112,11 @@ func TestEndpointSlicingServiceUpdate(t *testing.T) {
 					ClusterIP: "9.9.9.9",
 				},
 			})
-			xdsUpdater := s.XdsUpdater.(*xds.FakeXdsUpdater)
+			fx := s.XdsUpdater.(*xdsfake.Updater)
 			createEndpointSlice(t, s.KubeClient().Kube(), "slice1", "service", namespace, []v1.EndpointPort{{Name: "http", Port: 80}}, []string{"1.2.3.4"})
 			createEndpointSlice(t, s.KubeClient().Kube(), "slice2", "service", namespace, []v1.EndpointPort{{Name: "http", Port: 80}}, []string{"1.2.3.4"})
 			expectEndpoints(t, s, "outbound|80||service.namespace.svc.cluster.local", []string{"1.2.3.4:80"}, nil)
-			xdsUpdater.WaitOrFail(t, "svcupdate")
+			fx.WaitOrFail(t, "service")
 
 			// Trigger a service updates
 			makeService(t, s.KubeClient().Kube(), &v1.Service{
@@ -1155,7 +1137,7 @@ func TestEndpointSlicingServiceUpdate(t *testing.T) {
 					ClusterIP: "9.9.9.9",
 				},
 			})
-			xdsUpdater.WaitOrFail(t, "svcupdate")
+			fx.WaitOrFail(t, "service")
 			expectEndpoints(t, s, "outbound|80||service.namespace.svc.cluster.local", []string{"1.2.3.4:80"}, nil)
 		})
 	}
@@ -1187,7 +1169,7 @@ func TestSameIPEndpointSlicing(t *testing.T) {
 			ClusterIP: "9.9.9.9",
 		},
 	})
-	xdsUpdater := s.XdsUpdater.(*xds.FakeXdsUpdater)
+	fx := s.XdsUpdater.(*xdsfake.Updater)
 
 	// Delete endpoints with same IP
 	createEndpointSlice(t, s.KubeClient().Kube(), "slice1", "service", namespace, []v1.EndpointPort{{Name: "http", Port: 80}}, []string{"1.2.3.4"})
@@ -1196,10 +1178,10 @@ func TestSameIPEndpointSlicing(t *testing.T) {
 
 	// delete slice 1, it should still exist
 	_ = s.KubeClient().Kube().DiscoveryV1().EndpointSlices(namespace).Delete(context.TODO(), "slice1", metav1.DeleteOptions{})
-	xdsUpdater.WaitOrFail(t, "eds")
+	fx.WaitOrFail(t, "eds")
 	expectEndpoints(t, s, "outbound|80||service.namespace.svc.cluster.local", []string{"1.2.3.4:80"}, nil)
 	_ = s.KubeClient().Kube().DiscoveryV1().EndpointSlices(namespace).Delete(context.TODO(), "slice2", metav1.DeleteOptions{})
-	xdsUpdater.WaitOrFail(t, "eds")
+	fx.WaitOrFail(t, "eds")
 	expectEndpoints(t, s, "outbound|80||service.namespace.svc.cluster.local", nil, nil)
 }
 
@@ -1221,6 +1203,8 @@ func expectEndpoints(t *testing.T, s *xds.FakeDiscoveryServer, cluster string, e
 		}
 		return nil
 	}, retry.Converge(2), retry.Timeout(time.Second*2), retry.Delay(time.Millisecond*10))
+
+	retry.UntilSuccessOrFail(t, s.AssertEndpointConsistency, retry.Converge(2), retry.Timeout(time.Second*2), retry.Delay(time.Millisecond*10))
 }
 
 // nolint: unparam

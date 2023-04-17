@@ -30,6 +30,7 @@ import (
 	"github.com/spf13/cobra"
 
 	label2 "istio.io/api/label"
+	"istio.io/istio/istioctl/pkg/util/ambient"
 	"istio.io/istio/operator/pkg/util"
 	"istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/kube/inject"
@@ -177,10 +178,16 @@ func runBugReportCommand(_ *cobra.Command, logOpts *log.Options) error {
 		log.Errorf("using ./ to write archive: %s", err.Error())
 		outDir = "."
 	}
+	if outputDir != "" {
+		outDir = outputDir
+	}
 	outPath := filepath.Join(outDir, "bug-report.tar.gz")
 	common.LogAndPrintf("Creating an archive at %s.\n", outPath)
 
 	archiveDir := archive.DirToArchive(tempDir)
+	if tempDir != "" {
+		archiveDir = tempDir
+	}
 	if err := archive.Create(archiveDir, outPath); err != nil {
 		return err
 	}
@@ -270,6 +277,11 @@ func gatherInfo(runner *kubectlcmd.Runner, config *config.BugReportConfig, resou
 	cmdTimer := time.NewTimer(time.Duration(config.CommandTimeout))
 	beginTime := time.Now()
 
+	client, err := kube.NewCLIClient(kube.BuildClientCmd(config.KubeConfigPath, config.Context), "")
+	if err != nil {
+		appendGlobalErr(err)
+	}
+
 	clusterDir := archive.ClusterInfoPath(tempDir)
 
 	params := &content.Params{
@@ -300,11 +312,16 @@ func gatherInfo(runner *kubectlcmd.Runner, config *config.BugReportConfig, resou
 		proxyDir := archive.ProxyOutputPath(tempDir, namespace, pod)
 		switch {
 		case common.IsProxyContainer(params.ClusterVersion, container):
-			getFromCluster(content.GetCoredumps, cp, filepath.Join(proxyDir, "cores"), &mandatoryWg)
-			getFromCluster(content.GetNetstat, cp, proxyDir, &mandatoryWg)
-			getFromCluster(content.GetProxyInfo, cp, archive.ProxyOutputPath(tempDir, namespace, pod), &optionalWg)
-			getProxyLogs(runner, config, resources, p, namespace, pod, container, &optionalWg)
-
+			if !ambient.IsZtunnelPod(client, pod, namespace) {
+				getFromCluster(content.GetCoredumps, cp, filepath.Join(proxyDir, "cores"), &mandatoryWg)
+				getFromCluster(content.GetNetstat, cp, proxyDir, &mandatoryWg)
+				getFromCluster(content.GetProxyInfo, cp, archive.ProxyOutputPath(tempDir, namespace, pod), &optionalWg)
+				getProxyLogs(runner, config, resources, p, namespace, pod, container, &optionalWg)
+			} else {
+				getFromCluster(content.GetNetstat, cp, proxyDir, &mandatoryWg)
+				getFromCluster(content.GetZtunnelInfo, cp, archive.ProxyOutputPath(tempDir, namespace, pod), &optionalWg)
+				getProxyLogs(runner, config, resources, p, namespace, pod, container, &optionalWg)
+			}
 		case resources.IsDiscoveryContainer(params.ClusterVersion, namespace, pod, container):
 			getFromCluster(content.GetIstiodInfo, cp, archive.IstiodPath(tempDir, namespace, pod), &mandatoryWg)
 			getIstiodLogs(runner, config, resources, namespace, pod, &mandatoryWg)

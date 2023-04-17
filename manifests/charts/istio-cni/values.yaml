@@ -48,9 +48,13 @@ cni:
   ambient:
     # If enabled, ambient redirection will be enabled
     enabled: false
+    # Set ambient redirection mode: "iptables" or "ebpf"
+    redirectMode: "iptables"
+
     # Eventually this will have switch for iptables vs eBPF
   acmg:
     enabled: false
+    redirectMode: "iptables"
 
   repair:
     enabled: true
@@ -72,10 +76,6 @@ cni:
     requests:
       cpu: 100m
       memory: 100Mi
-
-  # Experimental taint controller for further race condition mitigation
-  taint:
-    enabled: false
 
   resourceQuotas:
     enabled: false

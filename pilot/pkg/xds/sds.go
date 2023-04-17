@@ -51,13 +51,12 @@ type SecretResource struct {
 
 var _ model.XdsCacheEntry = SecretResource{}
 
-func (sr SecretResource) Key() string {
-	return sr.SecretResource.Key() + "/" + sr.pkpConfHash
+func (sr SecretResource) Type() string {
+	return model.SDSType
 }
 
-// DependentTypes is not needed; we know exactly which configs impact SDS, so we can scope at DependentConfigs level
-func (sr SecretResource) DependentTypes() []kind.Kind {
-	return nil
+func (sr SecretResource) Key() any {
+	return sr.SecretResource.Key() + "/" + sr.pkpConfHash
 }
 
 func (sr SecretResource) DependentConfigs() []model.ConfigHash {
@@ -150,8 +149,8 @@ func (s *SecretGen) Generate(proxy *model.Proxy, w *model.WatchedResource, req *
 			}
 		}
 
-		cachedItem, f := s.cache.Get(sr)
-		if f && !features.EnableUnsafeAssertions {
+		cachedItem := s.cache.Get(sr)
+		if cachedItem != nil && !features.EnableUnsafeAssertions {
 			// If it is in the Cache, add it and continue
 			// We skip cache if assertions are enabled, so that the cache will assert our eviction logic is correct
 			results = append(results, cachedItem)
@@ -174,7 +173,7 @@ func (s *SecretGen) Generate(proxy *model.Proxy, w *model.WatchedResource, req *
 func (s *SecretGen) generate(sr SecretResource, configClusterSecrets, proxyClusterSecrets credscontroller.Controller, proxy *model.Proxy) *discovery.Resource {
 	// Fetch the appropriate cluster's secret, based on the credential type
 	var secretController credscontroller.Controller
-	switch sr.Type {
+	switch sr.ResourceType {
 	case credentials.KubernetesGatewaySecretType:
 		secretController = configClusterSecrets
 	default:
@@ -258,7 +257,7 @@ func filterAuthorizedResources(resources []SecretResource, proxy *model.Proxy, s
 	for _, r := range resources {
 		sameNamespace := r.Namespace == proxy.VerifiedIdentity.Namespace
 		verified := proxy.MergedGateway != nil && proxy.MergedGateway.VerifiedCertificateReferences.Contains(r.ResourceName)
-		switch r.Type {
+		switch r.ResourceType {
 		case credentials.KubernetesGatewaySecretType:
 			// For KubernetesGateway, we only allow VerifiedCertificateReferences.
 			// This means a Secret in the same namespace as the Gateway (which also must be in the same namespace

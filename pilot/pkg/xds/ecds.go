@@ -216,7 +216,7 @@ func parseSecretName(resourceName string, proxyCluster cluster.ID) (SecretResour
 	}
 	return SecretResource{
 		SecretResource: credentials.SecretResource{
-			Type:         credentials.KubernetesSecretType,
+			ResourceType: credentials.KubernetesSecretType,
 			Name:         split[1],
 			Namespace:    split[0],
 			ResourceName: resourceName,

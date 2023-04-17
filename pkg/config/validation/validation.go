@@ -1719,6 +1719,10 @@ func ValidateMeshConfig(mesh *meshconfig.MeshConfig) (Warning, error) {
 		scope.Warnf("found invalid extension provider (can be ignored if the given extension provider is not used): %v", err)
 	}
 
+	v = appendValidation(v, ValidateMeshTLSConfig(mesh))
+
+	v = appendValidation(v, ValidateMeshTLSDefaults(mesh))
+
 	return v.Unwrap()
 }
 
@@ -1730,6 +1734,39 @@ func validateTrustDomainConfig(config *meshconfig.MeshConfig) (errs error) {
 		if err := ValidateTrustDomain(tda); err != nil {
 			errs = multierror.Append(errs, fmt.Errorf("trustDomainAliases[%d], domain `%s` : %v", i, tda, err))
 		}
+	}
+	return
+}
+
+func ValidateMeshTLSConfig(mesh *meshconfig.MeshConfig) (errs error) {
+	if meshMTLS := mesh.MeshMTLS; meshMTLS != nil {
+		if meshMTLS.EcdhCurves != nil {
+			errs = multierror.Append(errs, errors.New("mesh TLS does not support ECDH curves configuration"))
+		}
+	}
+	return errs
+}
+
+func ValidateMeshTLSDefaults(mesh *meshconfig.MeshConfig) (v Validation) {
+	unrecognizedECDHCurves := sets.New[string]()
+	validECDHCurves := sets.New[string]()
+	duplicateECDHCurves := sets.New[string]()
+	if tlsDefaults := mesh.TlsDefaults; tlsDefaults != nil {
+		for _, cs := range tlsDefaults.EcdhCurves {
+			if !security.IsValidECDHCurve(cs) {
+				unrecognizedECDHCurves.Insert(cs)
+			} else if validECDHCurves.InsertContains(cs) {
+				duplicateECDHCurves.Insert(cs)
+			}
+		}
+	}
+
+	if len(unrecognizedECDHCurves) > 0 {
+		v = appendWarningf(v, "detected unrecognized ECDH curves: %v", sets.SortedList(unrecognizedECDHCurves))
+	}
+
+	if len(duplicateECDHCurves) > 0 {
+		v = appendWarningf(v, "detected duplicate ECDH curves: %v", sets.SortedList(duplicateECDHCurves))
 	}
 	return
 }
@@ -1902,37 +1939,41 @@ func ValidateControlPlaneAuthPolicy(policy meshconfig.AuthenticationPolicy) erro
 	return fmt.Errorf("unrecognized control plane auth policy %q", policy)
 }
 
-func validateWorkloadSelector(selector *type_beta.WorkloadSelector) error {
-	var errs error
+func validateWorkloadSelector(selector *type_beta.WorkloadSelector) Validation {
+	validation := Validation{}
 	if selector != nil {
 		for k, v := range selector.MatchLabels {
 			if k == "" {
-				errs = appendErrors(errs,
-					fmt.Errorf("empty key is not supported in selector: %q", fmt.Sprintf("%s=%s", k, v)))
+				err := fmt.Errorf("empty key is not supported in selector: %q", fmt.Sprintf("%s=%s", k, v))
+				validation = appendValidation(validation, err)
 			}
 			if strings.Contains(k, "*") || strings.Contains(v, "*") {
-				errs = appendErrors(errs,
-					fmt.Errorf("wildcard is not supported in selector: %q", fmt.Sprintf("%s=%s", k, v)))
+				err := fmt.Errorf("wildcard is not supported in selector: %q", fmt.Sprintf("%s=%s", k, v))
+				validation = appendValidation(validation, err)
 			}
+		}
+		if len(selector.MatchLabels) == 0 {
+			warning := fmt.Errorf("workload selector specified without labels") // nolint: stylecheck
+			validation = appendValidation(validation, WrapWarning(warning))
 		}
 	}
 
-	return errs
+	return validation
 }
 
 // ValidateAuthorizationPolicy checks that AuthorizationPolicy is well-formed.
 var ValidateAuthorizationPolicy = registerValidateFunc("ValidateAuthorizationPolicy",
 	func(cfg config.Config) (Warning, error) {
-		var warning Warning
 		in, ok := cfg.Spec.(*security_beta.AuthorizationPolicy)
 		if !ok {
 			return nil, fmt.Errorf("cannot cast to AuthorizationPolicy")
 		}
 
 		var errs error
-		if err := validateWorkloadSelector(in.Selector); err != nil {
-			errs = appendErrors(errs, err)
-		}
+		var warnings Warning
+		validation := validateWorkloadSelector(in.Selector)
+		errs = appendErrors(errs, validation)
+		warnings = appendErrors(warnings, validation.Warning)
 
 		if in.Action == security_beta.AuthorizationPolicy_CUSTOM {
 			if in.Rules == nil {
@@ -1962,6 +2003,10 @@ var ValidateAuthorizationPolicy = registerValidateFunc("ValidateAuthorizationPol
 					}
 				}
 				for _, when := range rule.GetWhen() {
+					if when == nil {
+						errs = appendErrors(errs, fmt.Errorf("when field cannot be nil"))
+						continue
+					}
 					errs = appendErrors(errs, check(when.Key == "source.namespace", when.Key))
 					errs = appendErrors(errs, check(when.Key == "source.principal", when.Key))
 					errs = appendErrors(errs, check(strings.HasPrefix(when.Key, "request.auth."), when.Key))
@@ -2078,12 +2123,14 @@ var ValidateAuthorizationPolicy = registerValidateFunc("ValidateAuthorizationPol
 
 			if ((fromRuleExist && !toRuleExist && !tcpRulesInFrom) || (toRuleExist && !tcpRulesInTo)) &&
 				in.Action == security_beta.AuthorizationPolicy_DENY {
-				warning = fmt.Errorf("configured AuthorizationPolicy will deny all traffic " +
+				warning := fmt.Errorf("configured AuthorizationPolicy will deny all traffic " +
 					"to TCP ports under its scope due to the use of only HTTP attributes in a DENY rule; " +
 					"it is recommended to explicitly specify the port")
+				warnings = appendErrors(warnings, warning)
+
 			}
 		}
-		return warning, multierror.Prefix(errs, fmt.Sprintf("invalid policy %s.%s:", cfg.Name, cfg.Namespace))
+		return warnings, multierror.Prefix(errs, fmt.Sprintf("invalid policy %s.%s:", cfg.Name, cfg.Namespace))
 	})
 
 // ValidateRequestAuthentication checks that request authentication spec is well-formed.
@@ -2094,13 +2141,14 @@ var ValidateRequestAuthentication = registerValidateFunc("ValidateRequestAuthent
 			return nil, errors.New("cannot cast to RequestAuthentication")
 		}
 
-		var errs error
-		errs = appendErrors(errs, validateWorkloadSelector(in.Selector))
+		errs := Validation{}
+		validation := validateWorkloadSelector(in.Selector)
+		errs = appendValidation(errs, validation)
 
 		for _, rule := range in.JwtRules {
-			errs = appendErrors(errs, validateJwtRule(rule))
+			errs = appendValidation(errs, validateJwtRule(rule))
 		}
-		return nil, errs
+		return errs.Unwrap()
 	})
 
 func validateJwtRule(rule *security_beta.JWTRule) (errs error) {
@@ -2188,9 +2236,10 @@ var ValidatePeerAuthentication = registerValidateFunc("ValidatePeerAuthenticatio
 			}
 		}
 
-		errs = appendErrors(errs, validateWorkloadSelector(in.Selector))
+		validation := validateWorkloadSelector(in.Selector)
+		errs = appendErrors(errs, validation)
 
-		return nil, errs
+		return validation.Warning, errs
 	})
 
 // ValidateVirtualService checks that a v1alpha3 route rule is well-formed.
@@ -3284,6 +3333,7 @@ var ValidateServiceEntry = registerValidateFunc("ValidateServiceEntry",
 				errs = appendValidation(errs, fmt.Errorf("invalid host %s", hostname))
 			} else {
 				errs = appendValidation(errs, ValidateWildcardDomain(hostname))
+				errs = appendValidation(errs, WrapWarning(validatePartialWildCard(hostname)))
 			}
 		}
 
@@ -3336,6 +3386,10 @@ var ValidateServiceEntry = registerValidateFunc("ValidateServiceEntry",
 		case networking.ServiceEntry_STATIC:
 			unixEndpoint := false
 			for _, endpoint := range serviceEntry.Endpoints {
+				if endpoint == nil {
+					errs = appendValidation(errs, errors.New("endpoint cannot be nil"))
+					continue
+				}
 				addr := endpoint.GetAddress()
 				if strings.HasPrefix(addr, UnixAddressPrefix) {
 					unixEndpoint = true
@@ -3919,6 +3973,9 @@ func validateWasmPluginMatch(selectors []*extensions.WasmPlugin_TrafficSelector)
 		return nil
 	}
 	for selIdx, sel := range selectors {
+		if sel == nil {
+			return fmt.Errorf("spec.Match[%d] is nil", selIdx)
+		}
 		for portIdx, port := range sel.Ports {
 			if port == nil {
 				return fmt.Errorf("spec.Match[%d].Ports[%d] is nil", selIdx, portIdx)

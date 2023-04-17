@@ -109,11 +109,6 @@ type Environment struct {
 	// EndpointShards for a service. This is a global (per-server) list, built from
 	// incremental updates. This is keyed by service and namespace
 	EndpointIndex *EndpointIndex
-
-	// TODO this can probably be part of the k8s controller's Pod indexing
-	// splitting it out just lets us modify things quicker in PoC state without
-	// upstream breaking us
-	// AmbientWorkloads ambient.Cache
 }
 
 func (e *Environment) Mesh() *meshconfig.MeshConfig {
@@ -1240,7 +1235,10 @@ func (node *Proxy) EnableHBONE() bool {
 	return node.IsAmbient() || (features.EnableHBONE && bool(node.Metadata.EnableHBONE))
 }
 
-// WaypointScope is either an entire namespace or an individual service account in the namespace.
+// WaypointScope is either an entire namespace or an individual service account
+// in the namespace. This setting dictates the upstream TLS verification
+// strategy, depending on the binding of the waypoints to its backend
+// workloads.
 type WaypointScope struct {
 	Namespace      string
 	ServiceAccount string // optional

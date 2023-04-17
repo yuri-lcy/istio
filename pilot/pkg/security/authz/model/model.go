@@ -45,7 +45,6 @@ const (
 	attrDestPort         = "destination.port"            // must be in the range [0, 65535].
 	attrConnSNI          = "connection.sni"              // server name indication, e.g. "www.example.com".
 	attrEnvoyFilter      = "experimental.envoy.filters." // an experimental attribute for checking Envoy Metadata directly.
-	attrAny              = "any"                         // adding an `any: true` permission.
 
 	// Internal names used to generate corresponding Envoy matcher.
 	methodHeader = ":method"
@@ -108,8 +107,6 @@ func New(r *authzpb.Rule) (*Model, error) {
 			basePrincipal.appendLast(requestHeaderGenerator{}, k, when.Values, when.NotValues)
 		case strings.HasPrefix(k, attrRequestClaims):
 			basePrincipal.appendLast(requestClaimGenerator{}, k, when.Values, when.NotValues)
-		case k == attrAny:
-			basePermission.appendLast(anyGenerator{}, k, when.Values, when.NotValues)
 		default:
 			return nil, fmt.Errorf("unknown attribute %s", when.Key)
 		}
@@ -261,7 +258,7 @@ func (r rule) principal(forTCP bool, useAuthenticated bool, action rbacpb.RBAC_A
 	var principals []*rbacpb.Principal
 	var or []*rbacpb.Principal
 	for _, value := range r.values {
-		p, err := r.g.principal(r.key, value, forTCP, false)
+		p, err := r.g.principal(r.key, value, forTCP, useAuthenticated)
 		if err := r.checkError(action, err); err != nil {
 			return nil, err
 		}

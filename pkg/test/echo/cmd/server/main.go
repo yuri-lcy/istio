@@ -21,7 +21,8 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	_ "google.golang.org/grpc/xds" // To install the xds resolvers and balancers.
+	// To install the xds resolvers and balancers.
+	_ "google.golang.org/grpc/xds"
 
 	"istio.io/istio/pkg/cmd"
 	"istio.io/istio/pkg/config/protocol"

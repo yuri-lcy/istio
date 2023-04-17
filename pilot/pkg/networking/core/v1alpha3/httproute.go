@@ -204,11 +204,12 @@ func (configgen *ConfigGeneratorImpl) buildSidecarOutboundHTTPRouteConfig(
 	}
 
 	out := &route.RouteConfiguration{
-		Name:             routeName,
-		VirtualHosts:     virtualHosts,
-		ValidateClusters: proto.BoolFalse,
+		Name:                           routeName,
+		VirtualHosts:                   virtualHosts,
+		ValidateClusters:               proto.BoolFalse,
+		MaxDirectResponseBodySizeBytes: istio_route.DefaultMaxDirectResponseBodySizeBytes,
 	}
-	if SidecarIgnorePort(node) {
+	if features.SidecarIgnorePort {
 		out.IgnorePortInHostMatching = true
 	}
 
@@ -385,8 +386,8 @@ func BuildSidecarOutboundVirtualHosts(node *model.Proxy, push *model.PushContext
 	virtualHostWrappers := istio_route.BuildSidecarVirtualHostWrapper(routeCache, node, push, servicesByName, virtualServices, listenerPort)
 
 	if features.EnableRDSCaching {
-		resource, exist := xdsCache.Get(routeCache)
-		if exist && !features.EnableUnsafeAssertions {
+		resource := xdsCache.Get(routeCache)
+		if resource != nil && !features.EnableUnsafeAssertions {
 			return nil, resource, routeCache
 		}
 	}
@@ -541,15 +542,8 @@ func getVirtualHostsForSniffedServicePort(vhosts []*route.VirtualHost, routeName
 	return virtualHosts
 }
 
-// GatewayIgnorePort determines if we can exclude ports from domain matches
-func GatewayIgnorePort(node *model.Proxy) bool {
-	return util.IsIstioVersionGE115(node.IstioVersion) && !node.IsProxylessGrpc()
-}
-
-// SidecarIgnorePort determines if we can exclude ports from domain matches for sidecars specifically.
-// This differs from GatewayIgnorePort as it is flag protected to avoid breaking change risks
 func SidecarIgnorePort(node *model.Proxy) bool {
-	return util.IsIstioVersionGE115(node.IstioVersion) && !node.IsProxylessGrpc() && features.SidecarIgnorePort
+	return !node.IsProxylessGrpc() && features.SidecarIgnorePort
 }
 
 // generateVirtualHostDomains generates the set of domain matches for a service being accessed from

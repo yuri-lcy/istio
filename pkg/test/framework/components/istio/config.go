@@ -128,8 +128,7 @@ type Config struct {
 	ConfigClusterValues string
 
 	// Overrides for the Helm values file.
-	Values            map[string]string
-	UnvalidatedValues map[string]string
+	Values map[string]string
 
 	// Indicates that the test should deploy Istio into the target Kubernetes cluster before running tests.
 	DeployIstio bool
@@ -158,8 +157,20 @@ type Config struct {
 	// custom deployment for ingress and egress gateway on remote clusters.
 	GatewayValues string
 
-	// Custom deploymeny for east-west gateway
+	// Custom deployment for east-west gateway
 	EastWestGatewayValues string
+
+	// IngressGatewayServiceName is the service name to use to reference the ingressgateway
+	// This field should only be set when DeployIstio is false
+	IngressGatewayServiceName string
+
+	// IngressGatewayServiceNamespace allows overriding the namespace of the ingressgateway service (defaults to SystemNamespace)
+	// This field should only be set when DeployIstio is false
+	IngressGatewayServiceNamespace string
+
+	// IngressGatewayIstioLabel allows overriding the selector of the ingressgateway service (defaults to istio=ingressgateway)
+	// This field should only be set when DeployIstio is false
+	IngressGatewayIstioLabel string
 }
 
 func (c *Config) OverridesYAML(s *resource.Settings) string {
@@ -230,7 +241,7 @@ func DefaultConfig(ctx resource.Context) (Config, error) {
 	if err := checkFileExists(iopFile); err != nil {
 		scopes.Framework.Warnf("Default IOPFile missing: %v", err)
 	}
-	s.UnvalidatedValues = map[string]string{}
+
 	var err error
 	if s.Values, err = newHelmValues(ctx); err != nil {
 		return Config{}, err
@@ -328,6 +339,9 @@ func (c *Config) String() string {
 	result += fmt.Sprintf("IstiodlessRemotes:              %v\n", c.IstiodlessRemotes)
 	result += fmt.Sprintf("OperatorOptions:                %v\n", c.OperatorOptions)
 	result += fmt.Sprintf("EnableCNI:                      %v\n", c.EnableCNI)
+	result += fmt.Sprintf("IngressGatewayServiceName:      %v\n", c.IngressGatewayServiceName)
+	result += fmt.Sprintf("IngressGatewayServiceNamespace: %v\n", c.IngressGatewayServiceNamespace)
+	result += fmt.Sprintf("IngressGatewayIstioLabel:     	 %v\n", c.IngressGatewayIstioLabel)
 
 	return result
 }

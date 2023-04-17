@@ -214,10 +214,9 @@ func (m *Multicluster) addCluster(cluster *multicluster.Cluster) (*kubeControlle
 	if !configCluster {
 		options.DiscoveryNamespacesFilter = nil
 	}
-	if configCluster {
-		options.ConfigController = m.configController
-	}
+	options.ConfigController = m.configController
 	log.Infof("Initializing Kubernetes service registry %q", options.ClusterID)
+	options.ConfigCluster = configCluster
 	kubeRegistry := NewController(client, options)
 	kubeController := &kubeController{
 		Controller: kubeRegistry,
@@ -236,7 +235,7 @@ func (m *Multicluster) initializeCluster(cluster *multicluster.Cluster, kubeCont
 		// Add an instance handler in the kubernetes registry to notify service entry store about pod events
 		kubeRegistry.AppendWorkloadHandler(m.serviceEntryController.WorkloadInstanceHandler)
 	}
-	if m.configController != nil {
+	if m.configController != nil && features.EnableAmbientControllers {
 		m.configController.RegisterEventHandler(gvk.AuthorizationPolicy, kubeRegistry.AuthorizationPolicyHandler)
 	}
 
@@ -402,7 +401,7 @@ func (m *Multicluster) deleteCluster(clusterID cluster.ID) {
 func createWleConfigStore(client kubelib.Client, revision string, opts Options) (model.ConfigStoreController, error) {
 	log.Infof("Creating WorkloadEntry only config store for %s", opts.ClusterID)
 	workloadEntriesSchemas := collection.NewSchemasBuilder().
-		MustAdd(collections.IstioNetworkingV1Alpha3Workloadentries).
+		MustAdd(collections.WorkloadEntry).
 		Build()
 	crdOpts := crdclient.Option{Revision: revision, DomainSuffix: opts.DomainSuffix, Identifier: "mc-workload-entry-controller"}
 	return crdclient.NewForSchemas(client, crdOpts, workloadEntriesSchemas)

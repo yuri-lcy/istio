@@ -95,14 +95,21 @@ var rootCmd = &cobra.Command{
 
 		if cfg.InstallConfig.AmbientEnabled {
 			// Start ambient controller
+			redirectMode := ambient.IptablesMode
+			if cfg.InstallConfig.EbpfEnabled {
+				redirectMode = ambient.EbpfMode
+			}
 			server, err := ambient.NewServer(ctx, ambient.AmbientArgs{
 				SystemNamespace: ambient.PodNamespace,
 				Revision:        ambient.Revision,
+				RedirectMode:    redirectMode,
+				LogLevel:        cfg.InstallConfig.LogLevel,
 			})
 			if err != nil {
 				return fmt.Errorf("failed to create ambient informer service: %v", err)
 			}
 			server.Start()
+			defer server.Stop()
 		}
 
 		isReady := install.StartServer()
@@ -176,6 +183,7 @@ func init() {
 	registerBooleanParameter(constants.AmbientEnabled, false, "Whether ambient controller is enabled")
 	registerBooleanParameter(constants.AcmgEnabled, true, "Whether acmg controller is enabled")
 
+	registerBooleanParameter(constants.EbpfEnabled, false, "Whether ebpf redirection is enabled")
 	// Repair
 	registerBooleanParameter(constants.RepairEnabled, true, "Whether to enable race condition repair or not")
 	registerBooleanParameter(constants.RepairDeletePods, false, "Controller will delete pods when detecting pod broken by race condition")
@@ -267,6 +275,7 @@ func constructConfig() (*config.Config, error) {
 
 		AmbientEnabled: viper.GetBool(constants.AmbientEnabled),
 		AcmgEnabled:    viper.GetBool(constants.AcmgEnabled),
+		EbpfEnabled:    viper.GetBool(constants.EbpfEnabled),
 	}
 
 	if len(installCfg.K8sNodeName) == 0 {

@@ -35,7 +35,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
-	acmgcontroller "istio.io/istio/pilot/pkg/acmg/controller"
 	"k8s.io/client-go/rest"
 
 	"istio.io/api/security/v1beta1"
@@ -68,7 +67,6 @@ import (
 	"istio.io/istio/pkg/security"
 	"istio.io/istio/pkg/spiffe"
 	"istio.io/istio/pkg/util/sets"
-	"istio.io/istio/security/pkg/k8s/chiron"
 	"istio.io/istio/security/pkg/pki/ca"
 	"istio.io/istio/security/pkg/pki/ra"
 	"istio.io/istio/security/pkg/server/ca/authenticate"
@@ -148,9 +146,8 @@ type Server struct {
 	cacertsWatcher *fsnotify.Watcher
 	dnsNames       []string
 
-	certController *chiron.WebhookController
-	CA             *ca.IstioCA
-	RA             ra.RegistrationAuthority
+	CA *ca.IstioCA
+	RA ra.RegistrationAuthority
 
 	// TrustAnchors for workload to workload mTLS
 	workloadTrustBundle     *tb.TrustBundle
@@ -176,10 +173,6 @@ type Server struct {
 	statusManager  *status.Manager
 	// RWConfigStore is the configstore which allows updates, particularly for status.
 	RWConfigStore model.ConfigStoreController
-
-	// Can be used to wait for CRDs
-	// TODO: this is currently looking at the config cluster only, should be on a per-cluster basis
-	waitForCRD func(k config.GroupVersionKind, stop <-chan struct{}) bool
 }
 
 type webhookInfo struct {
@@ -241,11 +234,6 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 		istiodCertBundleWatcher: keycertbundle.NewWatcher(),
 		webhookInfo:             &webhookInfo{},
 	}
-	// Used for readiness, monitoring and debug handlers.
-	var (
-		whMu sync.RWMutex
-		wh   *inject.Webhook
-	)
 
 	// Apply custom initialization functions.
 	for _, fn := range initFuncs {
@@ -291,6 +279,7 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 	caOpts := &caOptions{
 		TrustDomain:      s.environment.Mesh().TrustDomain,
 		Namespace:        args.Namespace,
+		DiscoveryFilter:  args.RegistryOptions.KubeOptions.GetFilter(),
 		ExternalCAType:   ra.CaExternalType(externalCaType),
 		CertSignerDomain: features.CertSignerDomain,
 	}
@@ -307,16 +296,6 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 	if err := s.initControllers(args); err != nil {
 		return nil, err
 	}
-
-	getWebhookConfig := func() inject.WebhookConfig {
-		whMu.RLock()
-		defer whMu.RUnlock()
-		if wh != nil {
-			return wh.GetConfig()
-		}
-		return inject.WebhookConfig{}
-	}
-	s.initAcmg(args, getWebhookConfig)
 
 	s.XDSServer.InitGenerators(e, args.Namespace, s.internalDebugMux)
 
@@ -368,7 +347,7 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 		&authenticate.ClientCertAuthenticator{},
 	}
 	if args.JwtRule != "" {
-		jwtAuthn, err := initOIDC(args, s.environment.Mesh().TrustDomain)
+		jwtAuthn, err := initOIDC(args)
 		if err != nil {
 			return nil, fmt.Errorf("error initializing OIDC: %v", err)
 		}
@@ -410,7 +389,7 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 	return s, nil
 }
 
-func initOIDC(args *PilotArgs, trustDomain string) (security.Authenticator, error) {
+func initOIDC(args *PilotArgs) (security.Authenticator, error) {
 	// JWTRule is from the JWT_RULE environment variable.
 	// An example of json string for JWTRule is:
 	// `{"issuer": "foo", "jwks_uri": "baz", "audiences": ["aud1", "aud2"]}`.
@@ -420,7 +399,7 @@ func initOIDC(args *PilotArgs, trustDomain string) (security.Authenticator, erro
 		return nil, fmt.Errorf("failed to unmarshal JWT rule: %v", err)
 	}
 	log.Infof("Istiod authenticating using JWTRule: %v", jwtRule)
-	jwtAuthn, err := authenticate.NewJwtAuthenticator(jwtRule, trustDomain)
+	jwtAuthn, err := authenticate.NewJwtAuthenticator(jwtRule)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create the JWT authenticator: %v", err)
 	}
@@ -585,7 +564,7 @@ func (s *Server) initKubeClient(args *PilotArgs) error {
 			return fmt.Errorf("failed creating kube config: %v", err)
 		}
 
-		s.kubeClient, err = kubelib.NewClient(kubelib.NewClientConfigForRestConfig(kubeRestConfig))
+		s.kubeClient, err = kubelib.NewClient(kubelib.NewClientConfigForRestConfig(kubeRestConfig), args.RegistryOptions.KubeOptions.ClusterID)
 		if err != nil {
 			return fmt.Errorf("failed creating kube client: %v", err)
 		}
@@ -640,6 +619,10 @@ func (s *Server) initServers(args *PilotArgs) {
 		ReadTimeout: 30 * time.Second,
 	}
 	if multiplexGRPC {
+		// To allow the gRPC handler to make per-request decision,
+		// use ReadHeaderTimeout instead of ReadTimeout.
+		s.httpServer.ReadTimeout = 0
+		s.httpServer.ReadHeaderTimeout = 30 * time.Second
 		s.httpServer.Handler = multiplexHandler
 	}
 
@@ -917,7 +900,7 @@ func (s *Server) initRegistryEventHandlers() {
 			}
 			pushReq := &model.PushRequest{
 				Full:           true,
-				ConfigsUpdated: sets.New(model.ConfigKey{Kind: kind.FromGvk(curr.GroupVersionKind), Name: curr.Name, Namespace: curr.Namespace}),
+				ConfigsUpdated: sets.New(model.ConfigKey{Kind: kind.MustFromGVK(curr.GroupVersionKind), Name: curr.Name, Namespace: curr.Namespace}),
 				Reason:         []model.TriggerReason{model.ConfigUpdate},
 			}
 			s.XDSServer.ConfigUpdate(pushReq)
@@ -928,20 +911,17 @@ func (s *Server) initRegistryEventHandlers() {
 		}
 		for _, schema := range schemas {
 			// This resource type was handled in external/servicediscovery.go, no need to rehandle here.
-			if schema.Resource().GroupVersionKind() == collections.IstioNetworkingV1Alpha3Serviceentries.
-				Resource().GroupVersionKind() {
+			if schema.GroupVersionKind() == gvk.ServiceEntry {
 				continue
 			}
-			if schema.Resource().GroupVersionKind() == collections.IstioNetworkingV1Alpha3Workloadentries.
-				Resource().GroupVersionKind() {
+			if schema.GroupVersionKind() == gvk.WorkloadEntry {
 				continue
 			}
-			if schema.Resource().GroupVersionKind() == collections.IstioNetworkingV1Alpha3Workloadgroups.
-				Resource().GroupVersionKind() {
+			if schema.GroupVersionKind() == gvk.WorkloadGroup {
 				continue
 			}
 
-			s.configController.RegisterEventHandler(schema.Resource().GroupVersionKind(), configHandler)
+			s.configController.RegisterEventHandler(schema.GroupVersionKind(), configHandler)
 		}
 		if s.environment.GatewayAPIController != nil {
 			s.environment.GatewayAPIController.RegisterEventHandler(gvk.Namespace, func(config.Config, config.Config, model.Event) {
@@ -1161,11 +1141,6 @@ func (s *Server) initControllers(args *PilotArgs) error {
 
 	s.initSDSServer()
 
-	// Certificate controller is created before MCP controller in case MCP server pod
-	// waits to mount a certificate to be provisioned by the certificate controller.
-	if err := s.initCertController(args); err != nil {
-		return fmt.Errorf("error initializing certificate controller: %v", err)
-	}
 	if features.EnableEnhancedResourceScoping {
 		// setup namespace filter
 		args.RegistryOptions.KubeOptions.DiscoveryNamespacesFilter = s.multiclusterController.DiscoveryNamespacesFilter
@@ -1177,14 +1152,6 @@ func (s *Server) initControllers(args *PilotArgs) error {
 		return fmt.Errorf("error initializing service controllers: %v", err)
 	}
 	return nil
-}
-
-func (s *Server) initAcmg(args *PilotArgs, webhookConfig func() inject.WebhookConfig) {
-	acmgController := acmgcontroller.NewAggregate(args.Namespace, s.clusterID, webhookConfig, s.XDSServer, false)
-	s.environment.AcmgCache = acmgController
-	if s.multiclusterController != nil {
-		s.multiclusterController.AddHandler(acmgController)
-	}
 }
 
 func (s *Server) initMulticluster(args *PilotArgs) {
