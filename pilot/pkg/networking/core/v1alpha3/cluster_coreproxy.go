@@ -6,6 +6,7 @@ import (
 	internalupstream "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/internal_upstream/v3"
 	rawbuffer "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/raw_buffer/v3"
 	tls "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
+	metadata "github.com/envoyproxy/go-control-plane/envoy/type/metadata/v3"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	networking "istio.io/api/networking/v1alpha3"
@@ -42,6 +43,24 @@ func (configgen *ConfigGeneratorImpl) buildCoreProxyInboundClusters(cb *ClusterB
 		}
 	}
 	return clusters
+}
+
+var BaggagePassthroughTransportSocket = &core.TransportSocket{
+	Name: "envoy.transport_sockets.internal_upstream",
+	ConfigType: &core.TransportSocket_TypedConfig{TypedConfig: protoconv.MessageToAny(&internalupstream.InternalUpstreamTransport{
+		PassthroughMetadata: []*internalupstream.InternalUpstreamTransport_MetadataValueSource{
+			{
+				Kind: &metadata.MetadataKind{Kind: &metadata.MetadataKind_Cluster_{
+					Cluster: &metadata.MetadataKind_Cluster{},
+				}},
+				Name: "istio",
+			},
+		},
+		TransportSocket: &core.TransportSocket{
+			Name:       "envoy.transport_sockets.raw_buffer",
+			ConfigType: &core.TransportSocket_TypedConfig{TypedConfig: protoconv.MessageToAny(&rawbuffer.RawBuffer{})},
+		},
+	})},
 }
 
 // `inbound-vip|internal|hostname|port`. Will send to internal listener of the same name (without internal subset)
@@ -123,7 +142,7 @@ func (cb *ClusterBuilder) buildCoreProxyInboundVIP(svcs map[host.Name]*model.Ser
 			if port.Protocol.IsUnsupported() || port.Protocol.IsHTTP() {
 				clusters = append(clusters, cb.buildCoreProxyInboundVIPCluster(svc, *port, "http").build())
 			}
-			cfg := cb.proxy.SidecarScope.DestinationRule(model.TrafficDirectionInbound, cb.proxy, svc.Hostname).GetRule()
+			cfg := cb.unsafeWaypointOnlyProxy.SidecarScope.DestinationRule(model.TrafficDirectionInbound, cb.unsafeWaypointOnlyProxy, svc.Hostname).GetRule()
 			if cfg != nil {
 				destinationRule := cfg.Spec.(*networking.DestinationRule)
 				for _, ss := range destinationRule.Subsets {
@@ -138,6 +157,39 @@ func (cb *ClusterBuilder) buildCoreProxyInboundVIP(svcs map[host.Name]*model.Ser
 		}
 	}
 	return clusters
+}
+
+var InternalUpstreamSocketMatch = []*cluster.Cluster_TransportSocketMatch{
+	{
+		Name: "internal_upstream",
+		Match: &structpb.Struct{
+			Fields: map[string]*structpb.Value{
+				model.TunnelLabelShortName: {Kind: &structpb.Value_StringValue{StringValue: model.TunnelH2}},
+			},
+		},
+		TransportSocket: &core.TransportSocket{
+			Name: "envoy.transport_sockets.internal_upstream",
+			ConfigType: &core.TransportSocket_TypedConfig{TypedConfig: protoconv.MessageToAny(&internalupstream.InternalUpstreamTransport{
+				PassthroughMetadata: []*internalupstream.InternalUpstreamTransport_MetadataValueSource{
+					{
+						Kind: &metadata.MetadataKind{Kind: &metadata.MetadataKind_Host_{}},
+						Name: "tunnel",
+					},
+					{
+						Kind: &metadata.MetadataKind{Kind: &metadata.MetadataKind_Host_{
+							Host: &metadata.MetadataKind_Host{},
+						}},
+						Name: "istio",
+					},
+				},
+				TransportSocket: &core.TransportSocket{
+					Name:       "envoy.transport_sockets.raw_buffer",
+					ConfigType: &core.TransportSocket_TypedConfig{TypedConfig: protoconv.MessageToAny(&rawbuffer.RawBuffer{})},
+				},
+			})},
+		},
+	},
+	defaultTransportSocketMatch(),
 }
 
 // build podCluster

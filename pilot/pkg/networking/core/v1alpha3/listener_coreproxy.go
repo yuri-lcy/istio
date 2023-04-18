@@ -36,6 +36,12 @@ type LabeledWorkloadAndServices struct {
 	Services     []*model.Service
 }
 
+// buildWaypointListeners produces a list of listeners for waypoint
+func (configgen *ConfigGeneratorImpl) buildCoreProxyListeners(builder *ListenerBuilder) *ListenerBuilder {
+	builder.inboundListeners = builder.buildCoreProxyInbound()
+	return builder
+}
+
 func getPorts(services []*model.ServiceInstance) []model.Port {
 	p := map[int]model.Port{}
 	for _, s := range services {
@@ -107,7 +113,7 @@ func (lb *ListenerBuilder) buildCoreProxyInboundOriginateConnect() *listener.Lis
 		Name:              name,
 		UseOriginalDst:    wrappers.Bool(false),
 		ListenerSpecifier: &listener.Listener_InternalListener{InternalListener: &listener.Listener_InternalListenerConfig{}},
-		ListenerFilters:   []*listener.ListenerFilter{util.InternalListenerSetAddressFilter()},
+		ListenerFilters:   []*listener.ListenerFilter{xdsfilters.SetDstAddress},
 		FilterChains: []*listener.FilterChain{{
 			Filters: []*listener.Filter{{
 				Name: wellknown.TCPProxy,
@@ -184,7 +190,7 @@ func (lb *ListenerBuilder) buildCoreProxyInboundPod(wls []LabeledWorkloadAndServ
 			l := &listener.Listener{
 				Name:              name,
 				ListenerSpecifier: &listener.Listener_InternalListener{InternalListener: &listener.Listener_InternalListenerConfig{}},
-				ListenerFilters:   []*listener.ListenerFilter{util.InternalListenerSetAddressFilter()},
+				ListenerFilters:   []*listener.ListenerFilter{xdsfilters.SetDstAddress},
 				TrafficDirection:  core.TrafficDirection_INBOUND,
 				FilterChains:      []*listener.FilterChain{},
 			}
@@ -317,13 +323,7 @@ func (lb *ListenerBuilder) buildCoreProxyInboundVIPHTTPFilters(svc *model.Servic
 	h := lb.buildHTTPConnectionManager(httpOpts)
 
 	if lb.node.IsCoreProxy() {
-		restoreTLSFilter := &listener.Filter{
-			Name: "restore_tls",
-			ConfigType: &listener.Filter_TypedConfig{
-				TypedConfig: protoconv.TypedStruct("type.googleapis.com/istio.tls_passthrough.v1.RestoreTLS"),
-			},
-		}
-		filters = append(filters, restoreTLSFilter)
+		filters = append(filters, xdsfilters.RestoreTLSFilter)
 	}
 
 	filters = append(filters, &listener.Filter{
@@ -371,7 +371,7 @@ func (lb *ListenerBuilder) buildCoreProxyInboundVIP(svcs map[host.Name]*model.Se
 				TrafficDirection:  core.TrafficDirection_INBOUND,
 				FilterChains:      []*listener.FilterChain{},
 				ListenerFilters: []*listener.ListenerFilter{
-					util.InternalListenerSetAddressFilter(),
+					xdsfilters.SetDstAddress,
 					{
 						Name:       "envoy.filters.listener.metadata_to_peer_node",
 						ConfigType: &listener.ListenerFilter_TypedConfig{TypedConfig: protoconv.TypedStruct("type.googleapis.com/istio.telemetry.metadatatopeernode.v1.Config")},

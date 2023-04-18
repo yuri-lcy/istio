@@ -385,7 +385,16 @@ func buildEnvoyLbEndpoint(b *EndpointBuilder, e *model.IstioEndpoint) *endpoint.
 	if features.DrainingLabel != "" && e.Labels[features.DrainingLabel] != "" {
 		healthStatus = model.Draining
 	}
-
+	dir, _, _, _ := model.ParseSubsetKey(b.clusterName)
+	if dir == model.TrafficDirectionInboundVIP && b.proxy.IsCoreProxy() {
+		// For inbound, we only use EDS for the VIP cases. The VIP cluster will point to internal per-pod listeners
+		target := model.BuildSubsetKey(model.TrafficDirectionInboundPod, "", host.Name(e.Address), int(e.EndpointPort))
+		addr = util.BuildInternalAddress(target)
+	}
+	healthStatus = model.Healthy
+	if e.HealthStatus == model.UnHealthy {
+		healthStatus = model.UnHealthy
+	}
 	ep := &endpoint.LbEndpoint{
 		HealthStatus: core.HealthStatus(healthStatus),
 		LoadBalancingWeight: &wrappers.UInt32Value{

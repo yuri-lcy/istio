@@ -30,6 +30,7 @@ import (
 	"istio.io/istio/pilot/pkg/networking/util"
 	security "istio.io/istio/pilot/pkg/security/model"
 	"istio.io/istio/pilot/pkg/util/protoconv"
+	xdsfilters "istio.io/istio/pilot/pkg/xds/filters"
 	v3 "istio.io/istio/pilot/pkg/xds/v3"
 	"istio.io/istio/pkg/util/sets"
 	istiolog "istio.io/pkg/log"
@@ -46,10 +47,10 @@ type NodeProxyConfigGenerator struct {
 }
 
 const (
-	NodeProxyOutboundCapturePort       uint32 = 15001
-	NodeProxyInbound2CapturePort       uint32 = 15006
-	ZTunnelInboundNodeLocalCapturePort uint32 = 15088
-	NodeProxyInboundCapturePort        uint32 = 15008
+	NodeProxyOutboundCapturePort         uint32 = 15001
+	NodeProxyInbound2CapturePort         uint32 = 15006
+	NodeProxyInboundNodeLocalCapturePort uint32 = 15088
+	NodeProxyInboundCapturePort          uint32 = 15008
 
 	// OriginalSrcMark TODO: this needs to match the mark in the iptables rules.
 	// And also not clash with any other mark on the host level.
@@ -140,7 +141,7 @@ func (g *NodeProxyConfigGenerator) buildVirtualInboundClusterHBONE() *discovery.
 		LbConfig: &cluster.Cluster_OriginalDstLbConfig_{
 			OriginalDstLbConfig: &cluster.Cluster_OriginalDstLbConfig{
 				UseHttpHeader:        true,
-				UpstreamPortOverride: NodeProxyInboundCapturePort,
+				UpstreamPortOverride: &wrappers.UInt32Value{Value: NodeProxyInboundCapturePort},
 			},
 		},
 	}
@@ -386,16 +387,11 @@ func (g *NodeProxyConfigGenerator) buildInboundCaptureListener(proxy *model.Prox
 				ConfigNamespace: workload.Namespace,
 				Labels:          workload.Labels,
 			}
-			var allowedIdentities string
-			_, hasWaypoint := push.AcmgIndex.CoreProxy.ByIdentity[workload.Identity()]
-			if hasWaypoint {
-				allowedIdentities = strings.TrimPrefix(workload.Identity(), "spiffe://")
-			}
-			authzBuilder := authz.NewBuilderSkipIdentity(authz.Local, push, dummy, allowedIdentities)
-			tcp := authzBuilder.BuildTCP()
+			authzBuilder := authz.NewBuilder(authz.Local, push, dummy)
+			tcpAuthzBuilder := authzBuilder.BuildTCP()
 
 			var filters []*listener.Filter
-			filters = append(filters, tcp...)
+			filters = append(filters, tcpAuthzBuilder...)
 			filters = append(filters, &listener.Filter{
 				Name: "envoy.filters.network.http_connection_manager",
 				ConfigType: &listener.Filter_TypedConfig{
@@ -570,7 +566,7 @@ func outboundTunnelListener(name string, sa string) *discovery.Resource {
 		Name:              name,
 		UseOriginalDst:    wrappers.Bool(false),
 		ListenerSpecifier: &listener.Listener_InternalListener{InternalListener: &listener.Listener_InternalListenerConfig{}},
-		ListenerFilters:   []*listener.ListenerFilter{util.InternalListenerSetAddressFilter()},
+		ListenerFilters:   []*listener.ListenerFilter{xdsfilters.SetDstAddress},
 		FilterChains: []*listener.FilterChain{{
 			Filters: []*listener.Filter{{
 				Name: wellknown.TCPProxy,

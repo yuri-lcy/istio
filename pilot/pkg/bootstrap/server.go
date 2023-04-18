@@ -38,6 +38,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"istio.io/api/security/v1beta1"
+	acmgcontroller "istio.io/istio/pilot/pkg/acmg/controller"
 	kubecredentials "istio.io/istio/pilot/pkg/credentials/kube"
 	"istio.io/istio/pilot/pkg/features"
 	istiogrpc "istio.io/istio/pilot/pkg/grpc"
@@ -296,6 +297,20 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 	if err := s.initControllers(args); err != nil {
 		return nil, err
 	}
+
+	// Used for readiness, monitoring and debug handlers.
+	var (
+		whMu sync.RWMutex
+		wh   *inject.Webhook
+	)
+	s.initAcmg(args, func() inject.WebhookConfig {
+		whMu.RLock()
+		defer whMu.RUnlock()
+		if wh != nil {
+			return wh.GetConfig()
+		}
+		return inject.WebhookConfig{}
+	})
 
 	s.XDSServer.InitGenerators(e, args.Namespace, s.internalDebugMux)
 
@@ -1368,4 +1383,12 @@ func serviceUpdateNeedsPush(prev, curr *model.Service) bool {
 		return true
 	}
 	return !prev.Equals(curr)
+}
+
+func (s *Server) initAcmg(args *PilotArgs, webhookConfig func() inject.WebhookConfig) {
+	acmgController := acmgcontroller.NewAggregate(args.Namespace, s.clusterID, webhookConfig, s.XDSServer, false)
+	s.environment.AcmgCache = acmgController
+	if s.multiclusterController != nil {
+		s.multiclusterController.AddHandler(acmgController)
+	}
 }

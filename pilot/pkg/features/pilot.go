@@ -29,6 +29,9 @@ import (
 	"istio.io/pkg/log"
 )
 
+var AcmgAutoLabelIgnore = env.RegisterStringVar("ACMG_AUTO_LABEL_IGNORE", "istio-system,metallb-system,kube-system",
+	"ignored namespaces").Get()
+
 var (
 	MaxConcurrentStreams = env.Register(
 		"ISTIO_GPRC_MAXSTREAMS",

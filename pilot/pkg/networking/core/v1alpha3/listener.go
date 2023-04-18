@@ -108,7 +108,8 @@ func (configgen *ConfigGeneratorImpl) BuildListeners(node *model.Proxy,
 		builder = configgen.buildWaypointListeners(builder)
 	case model.Router:
 		builder = configgen.buildGatewayListeners(builder)
-
+	case model.CoreProxy:
+		builder = configgen.buildCoreProxyListeners(builder)
 	}
 
 	builder.patchListeners()

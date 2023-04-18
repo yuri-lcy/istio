@@ -263,7 +263,7 @@ type PushContext struct {
 
 	// GatewayAPIController holds a reference to the gateway API controller.
 	GatewayAPIController GatewayController
-	
+
 	AcmgIndex acmg.Indexes
 
 	// cache gateways addresses for each network
@@ -421,6 +421,8 @@ const (
 	NamespaceUpdate TriggerReason = "namespace"
 	// ClusterUpdate describes a push triggered by a Cluster change
 	ClusterUpdate TriggerReason = "cluster"
+
+	AcmgUpdate TriggerReason = "acmg"
 )
 
 // Merge two update requests together

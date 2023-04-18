@@ -105,7 +105,7 @@ func initForCluster(opts *Options) *acmgController {
 	if opts.LocalCluster {
 		autoLabelServer := NewAutoLabel()
 		// TODO handle istiodless remote clusters
-		autoLabelServer.initAutolabel(opts)
+		autoLabelServer.initAutoLabel(opts)
 	}
 	return &acmgController{
 		workloads: initWorkloadCache(opts),

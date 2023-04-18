@@ -49,7 +49,7 @@ func (a *AutoLabel) nsOnAcmg(ns string) bool {
 	return false
 }
 
-func (a *AutoLabel) initAutolabel(opts *Options) {
+func (a *AutoLabel) initAutoLabel(opts *Options) {
 	if !autoLabel && !opts.forceAutoLabel {
 		return
 	}
@@ -65,9 +65,12 @@ func (a *AutoLabel) initAutolabel(opts *Options) {
 	a.client = opts.Client
 	a.podLister = opts.Client.KubeInformer().Core().V1().Pods().Lister()
 
-	ignored := sets.New(append(strings.Split(features.AcmgAutolabelIgnore, ","), opts.SystemNamespace)...)
+	ignored := sets.New(append(strings.Split(features.AcmgAutoLabelIgnore, ","), opts.SystemNamespace)...)
 	workloadHandler := controllers.FilteredObjectHandler(podQueue.AddObject, a.acmgPodLabelFilter(ignored))
-	opts.Client.KubeInformer().Core().V1().Pods().Informer().AddEventHandler(workloadHandler)
+	if err, _ := opts.Client.KubeInformer().Core().V1().Pods().Informer().AddEventHandler(workloadHandler); err != nil {
+		log.Errorf("initAcmgAutoLabel failed %v", err)
+		return
+	}
 	go a.podQueue.Run(opts.Stop)
 }
 

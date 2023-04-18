@@ -40,7 +40,10 @@ func initWorkloadCache(opts *Options) *workloadCache {
 		return hasType
 	})
 
-	opts.Client.KubeInformer().Core().V1().Pods().Informer().AddEventHandler(proxyHandler)
+	if err, _ := opts.Client.KubeInformer().Core().V1().Pods().Informer().AddEventHandler(proxyHandler); err != nil {
+		log.Errorf("initWorkloadCache failed %v", err)
+		return nil
+	}
 
 	go queue.Run(opts.Stop)
 	return wc

@@ -718,12 +718,12 @@ func (node *Proxy) IsAmbient() bool {
 
 // IsCoreProxy returns true if the proxy is acting as a coreproxy proxy in an acmg mesh.
 func (node *Proxy) IsCoreProxy() bool {
-	return node.Metadata.AcmgType == acmg.TypeCoreProxy
+	return node.Type == CoreProxy
 }
 
 // IsNodeProxy returns true if the proxy is acting as a nodeproxy in an acmg mesh.
 func (node *Proxy) IsNodeProxy() bool {
-	return node.Metadata.AcmgType == acmg.TypeNodeProxy
+	return node.Type == NodeProxy
 }
 
 // IsAcmg returns true if the proxy is acting as either a nodeproxy or a coreproxy in an acmg mesh.
@@ -830,7 +830,7 @@ const (
 	NodeProxy NodeType = "nodeproxy"
 )
 
-var NodeTypes = [...]NodeType{SidecarProxy, Router, Waypoint, Ztunnel}
+var NodeTypes = [...]NodeType{SidecarProxy, Router, Waypoint, Ztunnel, CoreProxy, NodeProxy}
 
 // IPMode represents the IP mode of proxy.
 type IPMode int
