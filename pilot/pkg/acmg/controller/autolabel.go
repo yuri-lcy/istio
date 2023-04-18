@@ -55,7 +55,10 @@ func (a *AutoLabel) initAutoLabel(opts *Options) {
 	}
 	log.Infof("Starting acmg mesh auto-labeler")
 
-	opts.Client.KubeInformer().Core().V1().Namespaces().Informer().AddEventHandler(a.labeledNamespaceInformer())
+	if err, _ := opts.Client.KubeInformer().Core().V1().Namespaces().Informer().AddEventHandler(a.labeledNamespaceInformer()); err != nil {
+		log.Errorf("initAcmgAutoLabel failed %v", err)
+		return
+	}
 
 	podQueue := controllers.NewQueue("acmg pod label controller",
 		controllers.WithReconciler(a.acmgPodLabelPatcher(opts.Client)),

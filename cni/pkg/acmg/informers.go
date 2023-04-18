@@ -99,7 +99,7 @@ func (s *Server) Reconcile(input any) error {
 		if ns == nil {
 			return fmt.Errorf("failed to find namespace %v", ns)
 		}
-		wasEnabled := oldPod.Annotations[constants.AmbientRedirection] == constants.AmbientRedirectionEnabled
+		wasEnabled := oldPod.Annotations[constants.AcmgRedirection] == constants.AcmgRedirectionEnabled
 		nowEnabled := ambientpod.PodZtunnelEnabled(ns, newPod)
 		if wasEnabled && !nowEnabled {
 			log.Debugf("Pod %s no longer matches, removing from mesh", newPod.Name)
