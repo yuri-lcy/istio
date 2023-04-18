@@ -8,7 +8,7 @@ exclude k8s.io/kubernetes v1.13.0
 // Client-go does not handle different versions of mergo due to some breaking changes - use the matching version
 replace github.com/imdario/mergo => github.com/imdario/mergo v0.3.5
 
-//replace istio.io/api => github.com/yuri-lcy/api v0.0.0-20230224024019-102f0d25f20c
+replace istio.io/api => github.com/yuri-lcy/api v0.0.0-20230418084717-1744d549fadc
 
 //replace github.com/envoyproxy/go-control-plane => github.com/yuri-lcy/go-control-plane v0.11.1-0.20230322115949-5bca0c2dbd10
 
@@ -97,7 +97,7 @@ require (
 	k8s.io/api v0.27.0
 	k8s.io/apiextensions-apiserver v0.27.0
 	k8s.io/apimachinery v0.27.0
-	k8s.io/apiserver v0.27.0 // indirect
+	k8s.io/apiserver v0.27.0
 	k8s.io/cli-runtime v0.27.0
 	k8s.io/client-go v0.27.0
 	k8s.io/klog/v2 v2.90.1
@@ -110,13 +110,17 @@ require (
 	sigs.k8s.io/yaml v1.3.0
 )
 
+require github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
+
 require (
 	cloud.google.com/go/compute v1.19.0 // indirect
 	cloud.google.com/go/iam v0.13.0 // indirect
 	cloud.google.com/go/longrunning v0.4.1 // indirect
 	github.com/antlr/antlr4/runtime/Go/antlr/v4 v4.0.0-20230305170008-8188dc5388df // indirect
+	github.com/fvbommel/sortorder v1.0.1 // indirect
 	github.com/go-jose/go-jose/v3 v3.0.0 // indirect
 	github.com/google/s2a-go v0.1.0 // indirect
+	github.com/jonboulle/clockwork v0.2.2 // indirect
 	github.com/onsi/ginkgo/v2 v2.9.2 // indirect
 	github.com/quic-go/qpack v0.4.0 // indirect
 	github.com/quic-go/qtls-go1-19 v0.2.1 // indirect

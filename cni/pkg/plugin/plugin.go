@@ -216,24 +216,22 @@ func CmdAdd(args *skel.CmdArgs) (err error) {
 				break
 			}
 		}
-		log.Infof("acmgConf.Mode: %s", acmgConf.Mode)
 		log.Infof("acmgConf.NodeProxyReady: %v", acmgConf.NodeProxyReady)
 
 		added := false
-		if !excludePod && acmgConf.Mode != acmg.AcmgMeshOff.String() && acmgConf.NodeProxyReady {
+		if !excludePod && acmgConf.NodeProxyReady {
 			podIPs, err := getPodIPs(args.IfName, conf.PrevResult)
 			if err != nil {
 				log.Errorf("istio-cni cmdAdd failed to get pod IPs: %s", err)
 				return err
 			}
 			log.Infof("istio-cni cmdAdd podName: %s podIPs: %+v", podName, podIPs)
-			added, err = checkAcmg(*conf, *acmgConf, podName, podNamespace, args.IfName, podIPs)
+			added, err = checkAcmg(*conf, *acmgConf, podName, podNamespace, args.IfName, args.Netns, podIPs)
 			if err != nil {
 				log.Errorf("istio-cni cmdAdd failed to check acmg: %s", err)
 			}
 		}
 		if conf.AmbientEnabled {
-
 			ambientConf, err := ambient.ReadAmbientConfig()
 			if err != nil {
 				log.Errorf("istio-cni cmdAdd failed to read ambient config %v", err)

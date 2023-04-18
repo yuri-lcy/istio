@@ -15,13 +15,14 @@
 package acmgpod
 
 import (
+	"istio.io/api/annotation"
 	"istio.io/istio/pilot/pkg/acmg"
+	"istio.io/istio/pkg/config/constants"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
 	"istio.io/api/label"
-	"istio.io/api/mesh/v1alpha1"
 	"istio.io/pkg/log"
 )
 
@@ -62,62 +63,26 @@ func WorkloadFromPod(pod *corev1.Pod) acmg.Workload {
 	}
 }
 
-func hasPodIP(pod *corev1.Pod) bool {
-	return pod.Status.PodIP != ""
+// PodNodeProxyEnabled determines if a pod is eligible for ztunnel redirection
+func PodNodeProxyEnabled(namespace *corev1.Namespace, pod *corev1.Pod) bool {
+	if namespace.GetLabels()[constants.DataplaneMode] != constants.DataplaneModeAcmg {
+		// Namespace does not have ambient mode enabled
+		return false
+	}
+	if podHasSidecar(pod) {
+		// Ztunnel and sidecar for a single pod is currently not supported; opt out.
+		return false
+	}
+	if pod.Annotations[constants.AcmgRedirection] == constants.AcmgRedirectionDisabled {
+		// Pod explicitly asked to not have redirection enabled
+		return false
+	}
+	return true
 }
 
-func isRunning(pod *corev1.Pod) bool {
-	return pod.Status.Phase == corev1.PodRunning
-}
-
-func ShouldPodBeInIpset(namespace *corev1.Namespace, pod *corev1.Pod, meshMode string, ignoreNotRunning bool) bool {
-	// Pod must:
-	// - Be running
-	// - Have an IP address
-	// - Ambient mesh not be off
-	// - Cannot have a legacy label (istio.io/rev or istio-injection=enabled)
-	// - If mesh is in namespace mode, must be in active namespace
-	if (ignoreNotRunning || (isRunning(pod) && hasPodIP(pod))) &&
-		meshMode != AcmgMeshOff.String() &&
-		!HasLegacyLabel(pod.GetLabels()) &&
-		!PodHasOptOut(pod) &&
-		IsNamespaceActive(namespace, meshMode) {
+func podHasSidecar(pod *corev1.Pod) bool {
+	if _, f := pod.Annotations[annotation.SidecarStatus.Name]; f {
 		return true
-	}
-
-	return false
-}
-
-// @TODO Interim function for waypoint proxy, to be replaced after design meeting
-func PodHasOptOut(pod *corev1.Pod) bool {
-	if val, ok := pod.Labels["acmg-type"]; ok {
-		return val == "waypoint" || val == "none"
-	}
-	return false
-}
-
-func IsNamespaceActive(namespace *corev1.Namespace, meshMode string) bool {
-	// Must:
-	// - MeshConfig be in an "ON" mode
-	// - MeshConfig must be in a "DEFAULT" mode, plus:
-	//   - Namespace cannot have "legacy" labels (ie. istio.io/rev or istio-injection=enabled)
-	//   - Namespace must have label istio.io/dataplane-mode=ambient
-	if meshMode == AcmgMeshOn.String() ||
-		(meshMode == AcmgMeshNamespace.String() &&
-			namespace != nil &&
-			!HasLegacyLabel(namespace.GetLabels()) &&
-			namespace.GetLabels()["istio.io/dataplane-mode"] == "acmg") {
-		return true
-	}
-
-	return false
-}
-
-func HasSelectors(lbls map[string]string, selectors []labels.Selector) bool {
-	for _, sel := range selectors {
-		if sel.Matches(labels.Set(lbls)) {
-			return true
-		}
 	}
 	return false
 }
@@ -171,12 +136,3 @@ func HasLegacyLabel(lbl map[string]string) bool {
 
 	return false
 }
-
-const (
-	//AcmgMeshNamespace = v1alpha1.MeshConfig_AcmgMeshConfig_DEFAULT
-	//AcmgMeshOff       = v1alpha1.MeshConfig_AcmgMeshConfig_OFF
-	//AcmgMeshOn        = v1alpha1.MeshConfig_AcmgMeshConfig_ON
-	AcmgMeshNamespace = v1alpha1.MeshConfig_AmbientMeshConfig_DEFAULT
-	AcmgMeshOff       = v1alpha1.MeshConfig_AmbientMeshConfig_OFF
-	AcmgMeshOn        = v1alpha1.MeshConfig_AmbientMeshConfig_ON
-)

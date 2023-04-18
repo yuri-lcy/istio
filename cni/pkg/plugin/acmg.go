@@ -4,16 +4,16 @@ import (
 	"context"
 	"fmt"
 	"istio.io/istio/cni/pkg/acmg"
+	"istio.io/istio/cni/pkg/ambient"
+	ebpf "istio.io/istio/cni/pkg/ebpf-acmg/server"
 	"istio.io/istio/pilot/pkg/acmg/acmgpod"
+	"istio.io/pkg/log"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net"
+	"net/netip"
 )
 
-func checkAcmg(conf Config, acmgConfig acmg.AcmgConfigFile, podName, podNamespace, podIfname string, podIPs []net.IPNet) (bool, error) {
-	if acmgConfig.Mode == acmg.AcmgMeshOff.String() {
-		return false, nil
-	}
-
+func checkAcmg(conf Config, acmgConfig acmg.AcmgConfigFile, podName, podNamespace, podIfName, podNetNs string, podIPs []net.IPNet) (bool, error) {
 	if !acmgConfig.NodeProxyReady {
 		return false, fmt.Errorf("nodeproxy not ready")
 	}
@@ -36,29 +36,41 @@ func checkAcmg(conf Config, acmgConfig acmg.AcmgConfigFile, podName, podNamespac
 		return false, err
 	}
 
-	if acmgpod.HasLegacyLabel(pod.Labels) || acmgpod.HasLegacyLabel(ns.Labels) {
-		return false, fmt.Errorf("ambient: pod %s/%s or namespace has legacy labels", podNamespace, podName)
-	}
+	if acmgpod.PodNodeProxyEnabled(ns, pod) {
+		if acmgConfig.RedirectMode == acmg.EbpfMode.String() {
+			ifIndex, mac, err := ambient.GetIndexAndPeerMac(podIfName, podNetNs)
+			if err != nil {
+				return false, err
+			}
+			ips := []netip.Addr{}
+			for _, ip := range podIPs {
+				if v, err := netip.ParseAddr(ip.IP.String()); err == nil {
+					ips = append(ips, v)
+				}
+			}
+			err = ebpf.AddPodToMesh(uint32(ifIndex), mac, ips)
+			if err != nil {
+				return false, err
+			}
+			if err := acmg.AnnotateEnrolledPod(client, pod); err != nil {
+				log.Errorf("failed to annotate pod enrollment: %v", err)
+			}
+		} else {
+			acmg.NodeName = pod.Spec.NodeName
 
-	if acmgpod.HasSelectors(ns.Labels, acmgpod.ConvertDisabledSelectors(acmgConfig.DisabledSelectors)) {
-		return false, fmt.Errorf("acmg: namespace %s/%s has disabled selectors", podNamespace, podName)
-	}
+			acmg.HostIP, err = acmg.GetHostIP(client)
+			if err != nil || acmg.HostIP == "" {
+				return false, fmt.Errorf("error getting host IP: %v", err)
+			}
 
-	if acmgpod.ShouldPodBeInIpset(ns, pod, acmgConfig.Mode, true) {
-		acmg.NodeName = pod.Spec.NodeName
+			// Can't set this on GKE, but needed in AWS.. so silently ignore failures
+			_ = acmg.SetProc("/proc/sys/net/ipv4/conf/"+podIfName+"/rp_filter", "0")
 
-		acmg.HostIP, err = acmg.GetHostIP(client)
-		if err != nil || acmg.HostIP == "" {
-			return false, fmt.Errorf("error getting host IP: %v", err)
+			for _, ip := range podIPs {
+				acmg.AddPodToMesh(client, pod, ip.IP.String())
+			}
+			return true, nil
 		}
-
-		// Can't set this on GKE, but needed in AWS.. so silently ignore failures
-		_ = acmg.SetProc("/proc/sys/net/ipv4/conf/"+podIfname+"/rp_filter", "0")
-
-		for _, ip := range podIPs {
-			acmg.AddPodToMesh(pod, ip.IP.String())
-		}
-		return true, nil
 	}
 
 	return false, nil
