@@ -175,4 +175,13 @@ const (
 	AmbientRedirectionEnabled = "enabled"
 	// AmbientRedirectionDisabled is an opt-out, configured by user.
 	AmbientRedirectionDisabled = "disabled"
+
+	DataplaneModeAcmg = "acmg"
+	// AcmgRedirection specifies whether a pod has ambient redirection (to ztunnel) configured.
+	AcmgRedirection = "acmg.istio.io/redirection"
+	// AcmgRedirectionEnabled indicates redirection is configured. This is set by the CNI when it
+	// actually sets up redirection, rather than by the user.
+	AcmgRedirectionEnabled = "enabled"
+	// AcmgRedirectionDisabled is an opt-out, configured by user.
+	AcmgRedirectionDisabled = "disabled"
 )

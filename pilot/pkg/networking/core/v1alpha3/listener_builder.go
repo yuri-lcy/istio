@@ -79,13 +79,10 @@ type enabledInspector struct {
 	TLSInspector  bool
 }
 
-func NewListenerBuilder(configgen *ConfigGeneratorImpl, node *model.Proxy, push *model.PushContext) *ListenerBuilder {
+func NewListenerBuilder(node *model.Proxy, push *model.PushContext) *ListenerBuilder {
 	builder := &ListenerBuilder{
 		node: node,
 		push: push,
-	}
-	if configgen != nil {
-		builder.Discovery = configgen.Discovery
 	}
 	builder.authnBuilder = authn.NewBuilder(push, node)
 	builder.authzBuilder = authz.NewBuilder(authz.Local, push, node)

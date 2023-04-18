@@ -4,16 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"istio.io/api/mesh/v1alpha1"
 	"istio.io/istio/cni/pkg/acmg/constants"
 	ebpf "istio.io/istio/cni/pkg/ebpf-acmg/server"
-	"istio.io/istio/pilot/pkg/acmg/acmgpod"
-	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/kube/controllers"
+	"istio.io/istio/pkg/kube/kclient"
 	"istio.io/istio/pkg/lazy"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	listerv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/rest"
 	"os"
@@ -21,19 +21,17 @@ import (
 )
 
 type Server struct {
-	kubeClient  kube.Client
-	environment *model.Environment
-	ctx         context.Context
-	queue       controllers.Queue
+	kubeClient kube.Client
+	ctx        context.Context
+	queue      controllers.Queue
+
+	namespaces kclient.Client[*corev1.Namespace]
+	pods       kclient.Client[*corev1.Pod]
 
 	nsLister listerv1.NamespaceLister
 
-	meshMode          v1alpha1.MeshConfig_AcmgMeshConfig_AcmgMeshMode
-	disabledSelectors []labels.Selector
-	mu                sync.Mutex
-	nodeProxyRunning  bool
-
-	marshalableDisabledSelectors []*metav1.LabelSelector
+	mu           sync.Mutex
+	nodeproxyPod *corev1.Pod
 
 	iptablesCommand lazy.Lazy[string]
 	redirectMode    RedirectMode
@@ -41,69 +39,53 @@ type Server struct {
 }
 
 type AcmgConfigFile struct {
-	Mode              string                  `json:"mode"`
-	DisabledSelectors []*metav1.LabelSelector `json:"disabledSelectors"`
-	NodeProxyReady    bool                    `json:"nodeproxyReady"`
+	NodeProxyReady bool   `json:"nodeProxyReady"`
+	RedirectMode   string `json:"redirectMode"`
 }
 
 func NewServer(ctx context.Context, args AcmgArgs) (*Server, error) {
-	e := &model.Environment{
-		PushContext: model.NewPushContext(),
-	}
 	client, err := buildKubeClient(args.KubeConfig)
 	if err != nil {
 		return nil, fmt.Errorf("error initializing kube client: %v", err)
 	}
 	// Set some defaults
 	s := &Server{
-		environment:                  e,
-		ctx:                          ctx,
-		meshMode:                     AcmgMeshNamespace,
-		disabledSelectors:            acmgpod.LegacySelectors,
-		marshalableDisabledSelectors: acmgpod.LegacyLabelSelector,
-		nodeProxyRunning:             false,
-		kubeClient:                   client,
+		ctx:        ctx,
+		kubeClient: client,
 	}
 
 	s.iptablesCommand = lazy.New(func() (string, error) {
 		return s.detectIptablesCommand(), nil
 	})
 
-	// We need to find our Host IP -- is there a better way to do this?
-	h, err := GetHostIP(s.kubeClient.Kube())
-	if err != nil || h == "" {
-		return nil, fmt.Errorf("error getting host IP: %v", err)
+	switch args.RedirectMode {
+	case IptablesMode:
+		s.redirectMode = IptablesMode
+		// We need to find our Host IP -- is there a better way to do this?
+		h, err := GetHostIP(s.kubeClient.Kube())
+		if err != nil || h == "" {
+			return nil, fmt.Errorf("error getting host IP: %v", err)
+		}
+		HostIP = h
+		log.Infof("HostIP=%v", HostIP)
+	case EbpfMode:
+		s.redirectMode = EbpfMode
+		s.ebpfServer = ebpf.NewRedirectServer()
+		s.ebpfServer.SetLogLevel(args.LogLevel)
+		s.ebpfServer.Start(ctx.Done())
 	}
-	HostIP = h
-	log.Infof("HostIP=%v", HostIP)
 
-	s.initMeshConfiguration(args)
-	s.environment.AddMeshHandler(s.newConfigMapWatcher)
 	s.setupHandlers()
-
-	if s.environment.Mesh().AcmgMesh != nil {
-		s.mu.Lock()
-		s.meshMode = s.environment.Mesh().AcmgMesh.Mode
-		s.disabledSelectors = acmgpod.LegacySelectors
-		s.mu.Unlock()
-	}
 
 	s.UpdateConfig()
 
 	return s, nil
 }
 
-func (s *Server) setNodeProxyRunning(running bool) {
-	s.mu.Lock()
-	s.nodeProxyRunning = running
-	s.mu.Unlock()
-	s.UpdateConfig()
-}
-
 func (s *Server) isNodeProxyRunning() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.nodeProxyRunning
+	return s.nodeproxyPod != nil
 }
 
 func buildKubeClient(kubeConfig string) (kube.Client, error) {
@@ -116,7 +98,7 @@ func buildKubeClient(kubeConfig string) (kube.Client, error) {
 		return nil, fmt.Errorf("failed creating kube config: %v", err)
 	}
 
-	client, err := kube.NewClient(kube.NewClientConfigForRestConfig(kubeRestConfig))
+	client, err := kube.NewClient(kube.NewClientConfigForRestConfig(kubeRestConfig), "")
 	if err != nil {
 		return nil, fmt.Errorf("failed creating kube client: %v", err)
 	}
@@ -125,26 +107,144 @@ func buildKubeClient(kubeConfig string) (kube.Client, error) {
 }
 
 func (s *Server) Start() {
+	log.Debug("CNI acmg server starting")
 	s.kubeClient.RunAndWait(s.ctx.Done())
 	go func() {
 		s.queue.Run(s.ctx.Done())
-		s.cleanup()
 	}()
+}
+
+func (s *Server) Stop() {
+	log.Info("CNI acmg server terminating, cleaning up node net rules")
+	s.cleanupNode()
 }
 
 func (s *Server) UpdateConfig() {
 	log.Debug("Generating new acmg config file")
 
 	cfg := &AcmgConfigFile{
-		Mode:              s.meshMode.String(),
-		DisabledSelectors: s.marshalableDisabledSelectors,
-		NodeProxyReady:    s.isNodeProxyRunning(),
+		NodeProxyReady: s.isNodeProxyRunning(),
+		RedirectMode:   s.redirectMode.String(),
 	}
 
 	if err := cfg.write(); err != nil {
 		log.Errorf("Failed to write config file: %v", err)
 	}
 	log.Debug("Done")
+}
+
+var nodeProxyLabels = labels.ValidatedSetSelector(labels.Set{"app": "nodeproxy"})
+
+func (s *Server) ReconcileNodeProxy() error {
+	pods := s.pods.List(metav1.NamespaceAll, nodeProxyLabels)
+	var activePod *corev1.Pod
+	for _, p := range pods {
+		ready := kube.CheckPodReady(p) == nil
+		if !ready {
+
+			log.Debugf("nodeproxy pod not ready")
+			continue
+		}
+		if activePod == nil {
+			// Only pod ready, mark this as active
+			activePod = p
+			log.Debugf("nodeproxy pod set as active")
+		} else if p.CreationTimestamp.After(activePod.CreationTimestamp.Time) {
+			// If we have multiple pods that are ready, use the newest one.
+			// This ensures on a rolling update we start sending traffic to the new pod and drain the old one.
+			activePod = p
+			log.Debugf("newest nodeproxy pod set as active")
+		}
+	}
+
+	needsUpdate := false
+	s.mu.Lock()
+	if getUID(s.nodeproxyPod) != getUID(activePod) {
+		// Active pod change
+		s.nodeproxyPod = activePod
+		needsUpdate = true
+	}
+	s.mu.Unlock()
+
+	if !needsUpdate {
+		log.Debugf("active nodeproxy unchanged")
+		return nil
+	}
+	s.UpdateConfig()
+	if activePod == nil {
+		log.Infof("active nodeproxy updated, no nodeproxy running on the node")
+		s.cleanupNode()
+		return nil
+	}
+	log.Infof("active nodeproxy updated to %v", activePod.Name)
+
+	captureDNS := getEnvFromPod(activePod, "ISTIO_META_DNS_CAPTURE") == "true"
+
+	switch s.redirectMode {
+	case IptablesMode:
+		// TODO: we should not cleanup and recreate; this has downtime. We should mutate the existing rules in place
+		s.cleanupNode()
+		// TODO: this will fail for any networking setup that doesn't create veths for host<->pod networking.
+		// Do we care about that?
+		veth, err := getVethWithDestinationOf(activePod.Status.PodIP)
+		if err != nil {
+			return fmt.Errorf("failed to get veth device: %v", err)
+		}
+		// Create node-level networking rules for redirection
+		err = s.CreateRulesOnNode(veth.Attrs().Name, activePod.Status.PodIP, captureDNS)
+		if err != nil {
+			return fmt.Errorf("failed to configure node for ztunnel: %v", err)
+		}
+		// Collect info needed to jump into node proxy netns and configure it.
+		peerNs, err := getNsNameFromNsID(veth.Attrs().NetNsID)
+		if err != nil {
+			return fmt.Errorf("failed to get ns name: %v", err)
+		}
+		hostIP, err := GetHostIPByRoute(s.pods)
+		if err != nil || hostIP == "" {
+			log.Warnf("failed to getting host IP: %v", err)
+		}
+		peerIndex, err := getPeerIndex(veth)
+		if err != nil {
+			return fmt.Errorf("failed to get veth peerIndex: %v", err)
+		}
+		// Create pod-level networking rules for redirection (from within pod netns)
+		err = s.CreateRulesWithinNodeProxyNS(peerIndex, activePod.Status.PodIP, peerNs, hostIP)
+		if err != nil {
+			return fmt.Errorf("failed to configure node for ztunnel: %v", err)
+		}
+	case EbpfMode:
+		h, err := GetHostIPByRoute(s.pods)
+		if err != nil || h == "" {
+			log.Warnf("failed to getting host IP: %v", err)
+		} else if HostIP != h {
+			log.Infof("HostIP changed: (%v) -> (%v)", HostIP, h)
+			HostIP = h
+			if err := s.ebpfServer.UpdateHostIP([]string{HostIP}); err != nil {
+				log.Errorf("failed to update host IP: %v", err)
+			}
+		}
+
+		// TODO: this will fail for any networking setup that doesn't create veths for host<->pod networking.
+		// Do we care about that?
+		if err := s.updateNodeProxyEBPF(activePod, captureDNS); err != nil {
+			return fmt.Errorf("failed to configure ztunnel: %v", err)
+		}
+	}
+
+	// Reconcile namespaces, as it is possible for the original reconciliation to have failed, and a
+	// small pod to have started up before ztunnel is running... so we need to go back and make sure we
+	// catch the existing pods
+	s.ReconcileNamespaces()
+	return nil
+}
+
+// getUID is a nil safe UID accessor
+func getUID(o *corev1.Pod) types.UID {
+	if o == nil {
+		return ""
+	}
+	return o.GetUID()
 }
 
 func (c *AcmgConfigFile) write() error {
@@ -173,7 +273,6 @@ func ReadAcmgConfig() (*AcmgConfigFile, error) {
 
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
 		return &AcmgConfigFile{
-			Mode:           "OFF",
 			NodeProxyReady: false,
 		}, nil
 	}

@@ -108,11 +108,11 @@ func (configgen *ConfigGeneratorImpl) BuildListeners(node *model.Proxy,
 		builder = configgen.buildWaypointListeners(builder)
 	case model.Router:
 		builder = configgen.buildGatewayListeners(builder)
+
 	}
 
 	builder.patchListeners()
 	l := builder.getListeners()
-
 	if builder.node.EnableHBONE() && !builder.node.IsAmbient() {
 		l = append(l, outboundTunnelListener(builder.node))
 	}
@@ -1335,14 +1335,6 @@ func buildListener(opts buildListenerOpts, trafficDirection core.TrafficDirectio
 	}
 
 	accessLogBuilder.setListenerAccessLog(opts.push, opts.proxy, res, opts.class)
-
-	// TODO(ambient) probably shouldn't do this conversion here...
-	socketAddr := res.GetAddress().GetSocketAddress()
-	if socketAddr != nil && opts.proxy.IsWaypointProxy() {
-		res.Address = nil
-		res.ListenerSpecifier = &listener.Listener_InternalListener{InternalListener: &listener.Listener_InternalListenerConfig{}}
-		res.ListenerFilters = append(res.ListenerFilters, util.InternalListenerSetAddressFilter())
-	}
 
 	return res
 }

@@ -23,9 +23,13 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/florianl/go-tc"
 	"github.com/florianl/go-tc/core"
+	"github.com/hashicorp/go-multierror"
 	"github.com/josharian/native"
 	"golang.org/x/sys/unix"
+	"istio.io/istio/pkg/util/istiomultierror"
 	istiolog "istio.io/pkg/log"
+	"net"
+	"net/netip"
 	"os"
 )
 
@@ -61,6 +65,89 @@ type RedirectServer struct {
 	inboundProgName              string
 	outboundFd                   uint32
 	outboundProgName             string
+}
+
+var stringToLevel = map[string]uint32{
+	"debug": EBPFLogLevelDebug,
+	"info":  EBPFLogLevelInfo,
+	"none":  EBPFLogLevelNone,
+}
+
+func (r *RedirectServer) SetLogLevel(level string) {
+	if err := r.obj.LogLevel.Update(uint32(0), stringToLevel[level], ebpf.UpdateAny); err != nil {
+		log.Errorf("failed to update ebpf log level: %v", err)
+	}
+}
+
+func (r *RedirectServer) UpdateHostIP(ips []string) error {
+	if len(ips) > 2 {
+		return fmt.Errorf("too may ips inputed: %d", len(ips))
+	}
+	for _, v := range ips {
+		ip, err := netip.ParseAddr(v)
+		if err != nil {
+			return err
+		}
+		if ip.Is4() {
+			err = r.obj.HostIpInfo.Update(uint32(0), ip.As16(), ebpf.UpdateAny)
+		} else {
+			err = r.obj.HostIpInfo.Update(uint32(1), ip.As16(), ebpf.UpdateAny)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func AddPodToMesh(ifIndex uint32, macAddr net.HardwareAddr, ips []netip.Addr) error {
+	r := RedirectServer{}
+
+	if err := setLimit(); err != nil {
+		return err
+	}
+
+	if err := r.initBpfObjects(); err != nil {
+		return err
+	}
+
+	defer r.obj.Close()
+
+	multiErr := istiomultierror.New()
+
+	if err := r.attachTCForWorkLoad(ifIndex); err != nil {
+		multiErr = multierror.Append(multiErr, err)
+		if err := r.detachTCForWorkload(ifIndex); err != nil {
+			multiErr = multierror.Append(multiErr, err)
+		}
+		return multiErr.ErrorOrNil()
+	}
+	mapInfo := mapInfo{
+		Ifindex: ifIndex,
+	}
+	if len(macAddr) != 6 {
+		return fmt.Errorf("invalid mac addr(%s), only EUI-48/MAC-48 is supported", macAddr.String())
+	}
+	copy(mapInfo.MacAddr[:], macAddr)
+
+	if len(ips) == 0 {
+		return fmt.Errorf("nil ips inputed")
+	}
+	// TODO: support multiple IPs and IPv6
+	ipAddr := ips[0]
+	// ip slice is just in network endian
+	ip := ipAddr.AsSlice()
+	if len(ip) != 4 {
+		return fmt.Errorf("invalid ip addr(%s), ipv4 is supported", ipAddr.String())
+	}
+	if err := r.obj.AppInfo.Update(ip, mapInfo, ebpf.UpdateAny); err != nil {
+		multiErr = multierror.Append(multiErr, err)
+		if err := r.detachTCForWorkload(ifIndex); err != nil {
+			multiErr = multierror.Append(multiErr, err)
+		}
+	}
+
+	return multiErr.ErrorOrNil()
 }
 
 // Note: this struct should be exactly the same defined in C
@@ -196,7 +283,98 @@ func (r *RedirectServer) AcceptRequest(redirectArgs *RedirectArgs) {
 }
 
 func (r *RedirectServer) handleRequest(args *RedirectArgs) error {
+	var mapInfo mapInfo
+	multiErr := istiomultierror.New()
+	ipAddrs := args.IPAddrs
+	macAddr := args.MacAddr
+	ifindex := uint32(args.Ifindex)
+	peerIndex := uint32(args.PeerIndex)
+	ztunnel := args.IsNodeProxy
+	namespace := args.PeerNs
+	remove := args.Remove
 
+	if !remove {
+		if len(macAddr) != 6 {
+			return fmt.Errorf("invalid mac addr(%s), only EUI-48/MAC-48 is supported", macAddr.String())
+		}
+		mapInfo.Ifindex = ifindex
+		copy(mapInfo.MacAddr[:], macAddr)
+	}
+
+	if ztunnel {
+		if remove {
+			if ifindex != 0 && namespace != "" {
+				if err := r.detachTCForNodeProxy(ifindex, peerIndex, namespace); err != nil {
+					multiErr = multierror.Append(multiErr, err)
+				}
+			} else {
+				log.Debugf("ifindex(%d) or namespace(%s) invalid for ztunnel removal", ifindex, namespace)
+			}
+			// For array map, kernel doesn't support delete elem(refer to kernel/bpf/arraymap.c)
+			// it works just like an 'array'.
+			if err := r.obj.NodeproxyInfo.Update(uint32(0), mapInfo, ebpf.UpdateAny); err != nil {
+				multiErr = multierror.Append(multiErr, err)
+			}
+		} else {
+			if namespace == "" {
+				return fmt.Errorf("invalid namespace")
+			}
+			if err := r.attachTCForNodeProxy(ifindex, peerIndex, namespace); err != nil {
+				multiErr = multierror.Append(multiErr, err)
+				if err := r.detachTCForNodeProxy(ifindex, peerIndex, namespace); err != nil {
+					multiErr = multierror.Append(multiErr, err)
+				}
+				return multiErr.ErrorOrNil()
+			}
+			if args.CaptureDNS {
+				mapInfo.Flag |= CaptureDNSFlag
+			}
+			if err := r.obj.NodeproxyInfo.Update(uint32(0), mapInfo, ebpf.UpdateAny); err != nil {
+				multiErr = multierror.Append(multiErr, err)
+				if err := r.detachTCForNodeProxy(ifindex, peerIndex, namespace); err != nil {
+					multiErr = multierror.Append(multiErr, err)
+				}
+			}
+		}
+	} else {
+		if len(ipAddrs) == 0 {
+			return fmt.Errorf("nil ipAddrs inputed")
+		}
+		// TODO: support multiple IPs and IPv6
+		ipAddr := ipAddrs[0]
+		// ip slice is just in network endian
+		ip := ipAddr.AsSlice()
+		if len(ip) != 4 {
+			return fmt.Errorf("invalid ip addr(%s), ipv4 is supported", ipAddr.String())
+		}
+		if remove {
+			if ifindex != 0 {
+				if err := r.detachTCForWorkload(ifindex); err != nil {
+					multiErr = multierror.Append(multiErr, err)
+				}
+			} else {
+				log.Debugf("zero ifindex for app removal")
+			}
+			if err := r.obj.AppInfo.Delete(ip); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+				multiErr = multierror.Append(multiErr, err)
+			}
+		} else {
+			if err := r.attachTCForWorkLoad(ifindex); err != nil {
+				multiErr = multierror.Append(multiErr, err)
+				if err := r.detachTCForWorkload(ifindex); err != nil {
+					multiErr = multierror.Append(multiErr, err)
+				}
+				return multiErr.ErrorOrNil()
+			}
+			if err := r.obj.AppInfo.Update(ip, mapInfo, ebpf.UpdateAny); err != nil {
+				multiErr = multierror.Append(multiErr, err)
+				if err := r.detachTCForWorkload(ifindex); err != nil {
+					multiErr = multierror.Append(multiErr, err)
+				}
+			}
+		}
+	}
+	return multiErr.ErrorOrNil()
 }
 
 func (r *RedirectServer) attachTCForNodeProxy(ifindex, peerIndex uint32, namespace string) error {
@@ -229,6 +407,18 @@ func (r *RedirectServer) detachTCForWorkload(ifindex uint32) error {
 		return err
 	}
 
+	return nil
+}
+
+func (r *RedirectServer) attachTCForWorkLoad(ifindex uint32) error {
+	// attach to workload host veth's egress
+	if err := r.attachTC("", ifindex, "egress", r.inboundFd, r.inboundProgName); err != nil {
+		return err
+	}
+	// attach to workload host veth's ingress
+	if err := r.attachTC("", ifindex, "ingress", r.outboundFd, r.outboundProgName); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -271,18 +461,6 @@ func (r *RedirectServer) delClsactQdisc(namespace string, ifindex uint32) error 
 	}
 
 	return err
-}
-
-func (r *RedirectServer) attachTCForWorkLoad(ifindex uint32) error {
-	// attach to workload host veth's egress
-	if err := r.attachTC("", ifindex, "egress", r.inboundFd, r.inboundProgName); err != nil {
-		return err
-	}
-	// attach to workload host veth's ingress
-	if err := r.attachTC("", ifindex, "ingress", r.outboundFd, r.outboundProgName); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (r *RedirectServer) attachTC(namespace string, ifindex uint32, direction string, fd uint32, name string) error {
@@ -376,6 +554,30 @@ func (r *RedirectServer) attachTC(namespace string, ifindex uint32, direction st
 		}
 	}
 	return nil
+}
+
+//nolint:unused
+func (r *RedirectServer) dumpZtunnelInfo() (*mapInfo, error) {
+	var info mapInfo
+	if err := r.obj.NodeproxyInfo.Lookup(uint32(0), &info); err != nil {
+		return nil, fmt.Errorf("failed to look up ztunnel info: %w", err)
+	}
+	return &info, nil
+}
+
+//nolint:unused
+func (r *RedirectServer) dumpAppInfo() ([]uint32, []mapInfo) {
+	var keyOut uint32
+	var valueOut mapInfo
+	var values []mapInfo
+	var keys []uint32
+	mapIter := r.obj.AppInfo.Iterate()
+	for mapIter.Next(&keyOut, &valueOut) {
+		keys = append(keys, keyOut)
+		values = append(values, valueOut)
+
+	}
+	return keys, values
 }
 
 func htons(a uint16) uint16 {

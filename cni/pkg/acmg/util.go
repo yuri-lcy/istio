@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
 )
 
 type ExecList struct {
@@ -72,38 +71,6 @@ func execute(cmd string, args ...string) error {
 	}
 
 	return nil
-}
-
-func (s *Server) matchesAcmgSelectors(lbl map[string]string) bool {
-	return acmgSelectors.Matches(labels.Set(lbl))
-}
-
-func (s *Server) matchesDisabledSelectors(lbl map[string]string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, sel := range s.disabledSelectors {
-		if sel.Matches(labels.Set(lbl)) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func podOnMyNode(pod *corev1.Pod) bool {
-	return pod.Spec.NodeName == NodeName
-}
-
-func (s *Server) isAcmgGlobal() bool {
-	return s.meshMode == AcmgMeshOn
-}
-
-func (s *Server) isAcmgNamespaced() bool {
-	return s.meshMode == AcmgMeshNamespace
-}
-
-func (s *Server) isAcmgOff() bool {
-	return s.meshMode == AcmgMeshOff
 }
 
 func getEnvFromPod(pod *corev1.Pod, envName string) string {

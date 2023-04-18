@@ -15,54 +15,35 @@
 package acmg
 
 import (
-	"istio.io/istio/pilot/pkg/acmg/acmgpod"
-	corev1 "k8s.io/api/core/v1"
-	klabels "k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/cache"
-
-	mesh "istio.io/api/mesh/v1alpha1"
+	"fmt"
+	"istio.io/istio/cni/pkg/ambient/ambientpod"
+	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/kube/controllers"
+	"istio.io/istio/pkg/kube/kclient"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	klabels "k8s.io/apimachinery/pkg/labels"
 )
 
 var ErrLegacyLabel = "Namespace %s has sidecar label istio-injection or istio.io/rev " +
 	"enabled while also setting acmg mode. This is not supported and the namespace will " +
 	"be ignored from the acmg mesh."
 
-func (s *Server) newConfigMapWatcher() {
-	var newAcmgMeshConfig *mesh.MeshConfig_AcmgMeshConfig
-
-	if s.environment.Mesh().AcmgMesh == nil {
-		newAcmgMeshConfig = &mesh.MeshConfig_AcmgMeshConfig{
-			Mode: mesh.MeshConfig_AcmgMeshConfig_DEFAULT,
-		}
-	} else {
-		newAcmgMeshConfig = s.environment.Mesh().AcmgMesh
-	}
-
-	if s.meshMode != newAcmgMeshConfig.Mode {
-		log.Infof("Acmg mesh mode changed from %s to %s",
-			s.meshMode, newAcmgMeshConfig.Mode)
-		s.ReconcileNamespaces()
-	}
-	s.mu.Lock()
-	s.meshMode = newAcmgMeshConfig.Mode
-	s.disabledSelectors = acmgpod.ConvertDisabledSelectors(newAcmgMeshConfig.DisabledSelectors)
-	s.mu.Unlock()
-	s.UpdateConfig()
-}
-
 func (s *Server) setupHandlers() {
 	s.queue = controllers.NewQueue("acmg",
-		controllers.WithReconciler(s.Reconciler),
+		controllers.WithGenericReconciler(s.Reconcile),
 		controllers.WithMaxAttempts(5),
 	)
 
-	ns := s.kubeClient.KubeInformer().Core().V1().Namespaces()
-	s.nsLister = ns.Lister()
-	ns.Informer().AddEventHandler(controllers.ObjectHandler(s.queue.AddObject))
+	// We only need to handle pods on our node
+	s.pods = kclient.NewFiltered[*corev1.Pod](s.kubeClient, kclient.Filter{FieldSelector: "spec.nodeName=" + NodeName})
+	s.pods.AddEventHandler(controllers.FromEventHandler(func(o controllers.Event) {
+		s.queue.Add(o)
+	}))
 
-	s.kubeClient.KubeInformer().Core().V1().Pods().Informer().AddEventHandler(s.newPodInformer())
+	// Namespaces could be anything though, so we watch all of those
+	s.namespaces = kclient.New[*corev1.Namespace](s.kubeClient)
+	s.namespaces.AddEventHandler(controllers.ObjectHandler(s.EnqueueNamespace))
 	log.Infof("acmg handlers init ok!")
 }
 
@@ -72,172 +53,76 @@ func (s *Server) Run(stop <-chan struct{}) {
 }
 
 func (s *Server) ReconcileNamespaces() {
-	namespaces, err := s.nsLister.List(klabels.Everything())
-	if err != nil {
-		log.Errorf("Failed to list namespaces: %v", err)
-		return
-	}
-	for _, ns := range namespaces {
-		s.queue.AddObject(ns)
+	for _, ns := range s.namespaces.List(metav1.NamespaceAll, klabels.Everything()) {
+		s.EnqueueNamespace(ns)
 	}
 }
 
-func (s *Server) Reconciler(name types.NamespacedName) error {
-	// If ztunnel is not running, we won't requeue the namespace as it will be requeued after ztunnel comes online...
-	// let's do this to cleanup the logs a bit and drop an info message
-	if !s.isNodeProxyRunning() {
-		log.Infof("Cannot reconcile namespace %s as nodeproxy is not running", name.Name)
-		return nil
-	}
-
-	log.Infof("Reconciling namespace %s", name.Name)
-
-	ns, err := s.kubeClient.KubeInformer().Core().V1().Namespaces().Lister().Get(name.Name)
-	// Ignore not found or deleted namespaces, as the associated pods will be handled by the CNI plugin
-	if err != nil || ns == nil {
-		if err := controllers.IgnoreNotFound(err); err != nil {
-			log.Errorf("Failed to get namespace %s: %v", name.Name, err)
-			return err
-		}
-
-		return nil
-	}
-
-	matchDisabled := s.matchesDisabledSelectors(ns.GetLabels())
-
-	matchAcmg := s.matchesAcmgSelectors(ns.GetLabels())
-
-	pods, err := s.kubeClient.KubeInformer().Core().V1().Pods().Lister().Pods(name.Name).List(klabels.Everything())
-	if err != nil {
-		log.Errorf("Failed to list pods in namespace %s: %v", name.Name, err)
-		return err
-	}
-
-	if (s.isAcmgGlobal() || (s.isAcmgNamespaced() && matchAcmg)) && !matchDisabled {
-		if acmgpod.HasLegacyLabel(ns.GetLabels()) {
-			log.Errorf(ErrLegacyLabel, name.Name)
-			// Don't put the namespace back in queue, if "they" fix the label, it'll be requeued
-			return nil
-		}
-		log.Infof("Namespace %s is enabled in acmg mesh", name.Name)
-
-		for _, pod := range pods {
-			if podOnMyNode(pod) && !acmgpod.PodHasOptOut(pod) {
-				log.Debugf("Adding pod to mesh: %s", pod.Name)
-				AddPodToMesh(pod, "")
-			} else {
-				log.Debugf("Pod %s is not on my node, ignoring (on node: %s vs %s)", pod.Name, pod.Spec.NodeName, NodeName)
-			}
+// EnqueueNamespace takes a Namespace and enqueues all Pod objects that make need an update
+func (s *Server) EnqueueNamespace(o controllers.Object) {
+	namespace := o.GetName()
+	matchAmbient := o.GetLabels()[constants.DataplaneMode] == constants.DataplaneModeAcmg
+	if matchAmbient {
+		log.Infof("Namespace %s is enabled in acmg mesh", namespace)
+		for _, pod := range s.pods.List(namespace, klabels.Everything()) {
+			s.queue.Add(controllers.Event{
+				New:   pod,
+				Old:   pod,
+				Event: controllers.EventUpdate,
+			})
 		}
 	} else {
-		log.Infof("Namespace %s is disabled from acmg mesh", name.Name)
-		for _, pod := range pods {
-			if podOnMyNode(pod) {
-				log.Debugf("Checking if in ipset and deleting pod: %s", pod.Name)
-				DelPodFromMesh(pod)
-			} else {
-				log.Debugf("Pod %s is not on my node, ignoring (on node: %s vs %s)", pod.Name, pod.Spec.NodeName, NodeName)
-			}
+		log.Infof("Namespace %s is disabled from acmg mesh", namespace)
+		for _, pod := range s.pods.List(namespace, klabels.Everything()) {
+			s.queue.Add(controllers.Event{
+				New:   pod,
+				Event: controllers.EventDelete,
+			})
 		}
 	}
+}
 
+func (s *Server) Reconcile(input any) error {
+	event := input.(controllers.Event)
+	log := log.WithLabels("type", event.Event)
+	pod := event.Latest().(*corev1.Pod)
+	if nodeProxyPod(pod) {
+		return s.ReconcileNodeProxy()
+	}
+	switch event.Event {
+	case controllers.EventAdd:
+	case controllers.EventUpdate:
+		// For update, we just need to handle opt outs
+		newPod := event.New.(*corev1.Pod)
+		oldPod := event.Old.(*corev1.Pod)
+		ns := s.namespaces.Get(newPod.Namespace, "")
+		if ns == nil {
+			return fmt.Errorf("failed to find namespace %v", ns)
+		}
+		wasEnabled := oldPod.Annotations[constants.AmbientRedirection] == constants.AmbientRedirectionEnabled
+		nowEnabled := ambientpod.PodZtunnelEnabled(ns, newPod)
+		if wasEnabled && !nowEnabled {
+			log.Debugf("Pod %s no longer matches, removing from mesh", newPod.Name)
+			s.DelPodFromMesh(newPod)
+		}
+
+		if !wasEnabled && nowEnabled {
+			log.Debugf("Pod %s now matches, adding to mesh", newPod.Name)
+			s.AddPodToMesh(pod)
+		}
+	case controllers.EventDelete:
+		if s.redirectMode == IptablesMode && IsPodInIpset(pod) {
+			log.Infof("Pod %s/%s is now stopped... cleaning up.", pod.Namespace, pod.Name)
+			s.DelPodFromMesh(pod)
+		} else if s.redirectMode == EbpfMode {
+			log.Debugf("Pod %s/%s is now stopped or opt out... cleaning up.", pod.Namespace, pod.Name)
+			s.DelPodFromMesh(pod)
+		}
+		return nil
+	}
 	return nil
 }
 
-func (s *Server) newPodInformer() *cache.ResourceEventHandlerFuncs {
-	return &cache.ResourceEventHandlerFuncs{
-		// We only handle existing resources, so if we get an add event,
-		// we need to check to see if pod is running, if so, it's safe to
-		// assume it's existing and we've restarted.
-		//
-		// We also watch for nodeproxy to start, because that means we need to trigger
-		// a bunch of iptable and routing changes.
-		AddFunc: func(obj interface{}) {
-			// @TODO: maybe not using the full pod struct, likely related to
-			// https://github.com/solo-io/istio-sidecarless/issues/85
-			pod := obj.(*corev1.Pod)
-
-			if pod.GetLabels()["app"] == "nodeproxy" && podOnMyNode(pod) {
-				if pod.Status.Phase != corev1.PodRunning {
-					return
-				}
-
-				log.WithLabels("type", "add").Infof("nodeproxy is now running")
-
-				veth, err := getDeviceWithDestinationOf(pod.Status.PodIP)
-				if err != nil {
-					log.Errorf("Failed to get device for nodeproxy ip: %v", err)
-					return
-				}
-
-				captureDNS := getEnvFromPod(pod, "ISTIO_META_DNS_CAPTURE") == "true"
-				err = s.CreateRulesOnNode(veth, pod.Status.PodIP, captureDNS)
-				if err != nil {
-					log.Errorf("Failed to configure node for nodeproxy: %v", err)
-					return
-				}
-
-				s.setNodeProxyRunning(true)
-				// Reconile namespaces, as it is possible for the original reconciliation to have failed, and a
-				// small pod to have started up before ztunnel is running... so we need to go back and make sure we
-				// catch the existing pods
-				s.ReconcileNamespaces()
-			}
-		},
-		UpdateFunc: func(old, cur interface{}) {
-			// @TODO: maybe not using the full pod struct, likely related to
-			// https://github.com/solo-io/istio-sidecarless/issues/85
-			newPod := cur.(*corev1.Pod)
-			oldPod := old.(*corev1.Pod)
-
-			if newPod.GetLabels()["app"] == "nodeproxy" && podOnMyNode(newPod) {
-				// This will catch if ztunnel begins running after us... otherwise it gets handled by AddFunc
-				if newPod.Status.Phase != corev1.PodRunning || oldPod.Status.Phase == newPod.Status.Phase {
-					return
-				}
-
-				log.WithLabels("type", "update").Infof("nodeproxy is now running")
-
-				veth, err := getDeviceWithDestinationOf(newPod.Status.PodIP)
-				if err != nil {
-					log.Errorf("Failed to get device for nodeproxy ip: %v", err)
-					return
-				}
-
-				captureDNS := getEnvFromPod(newPod, "ISTIO_META_DNS_CAPTURE") == "true"
-				err = s.CreateRulesOnNode(veth, newPod.Status.PodIP, captureDNS)
-				if err != nil {
-					log.Errorf("Failed to configure node for nodeproxy: %v", err)
-					return
-				}
-
-				s.setNodeProxyRunning(true)
-				// Reconile namespaces, as it is possible for the original reconciliation to have failed, and a
-				// small pod to have started up before ztunnel is running... so we need to go back and make sure we
-				// catch the existing pods
-				s.ReconcileNamespaces()
-			}
-
-			// Catch pod with opt out applied
-			if acmgpod.PodHasOptOut(newPod) && !acmgpod.PodHasOptOut(oldPod) && podOnMyNode(newPod) {
-				log.Debugf("Pod %s matches opt out, but was not before, removing from mesh", newPod.Name)
-				DelPodFromMesh(newPod)
-				return
-			}
-		},
-		DeleteFunc: func(obj interface{}) {
-			// @TODO: maybe not using the full pod struct, likely related to
-			// https://github.com/solo-io/istio-sidecarless/issues/85
-			pod := obj.(*corev1.Pod)
-
-			if pod.GetLabels()["app"] == "nodeproxy" && podOnMyNode(pod) {
-				log.WithLabels("type", "delete").Infof("nodeproxy is now stopped... cleaning up.")
-				s.cleanup()
-				s.setNodeProxyRunning(false)
-			} else if podOnMyNode(pod) && IsPodInIpset(pod) {
-				log.WithLabels("type", "delete").Infof("Pod %s/%s is now stopped... cleaning up.", pod.Namespace, pod.Name)
-				DelPodFromMesh(pod)
-			}
-		},
-	}
+func nodeProxyPod(pod *corev1.Pod) bool {
+	return pod.GetLabels()["app"] == "nodeproxy"
 }

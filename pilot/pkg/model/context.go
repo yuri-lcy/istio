@@ -845,7 +845,7 @@ const (
 // IsApplicationNodeType verifies that the NodeType is one of the declared constants in the model
 func IsApplicationNodeType(nType NodeType) bool {
 	switch nType {
-	case SidecarProxy, Router, Waypoint, Ztunnel:
+	case SidecarProxy, Router, Waypoint, Ztunnel, CoreProxy, NodeProxy:
 		return true
 	default:
 		return false

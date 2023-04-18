@@ -82,15 +82,23 @@ var rootCmd = &cobra.Command{
 		}
 
 		if cfg.InstallConfig.AcmgEnabled {
+			// Start ambient controller
+			acmgRedirectMode := acmg.IptablesMode
+			if cfg.InstallConfig.EbpfEnabled {
+				acmgRedirectMode = acmg.EbpfMode
+			}
 			// Start acmg controller
 			server, err := acmg.NewServer(ctx, acmg.AcmgArgs{
 				SystemNamespace: acmg.PodNamespace,
 				Revision:        acmg.Revision,
+				RedirectMode:    acmgRedirectMode,
+				LogLevel:        cfg.InstallConfig.LogLevel,
 			})
 			if err != nil {
-				return fmt.Errorf("failed to create ambient informer service: %v", err)
+				return fmt.Errorf("failed to create acmg informer service: %v", err)
 			}
 			server.Start()
+			defer server.Stop()
 		}
 
 		if cfg.InstallConfig.AmbientEnabled {
