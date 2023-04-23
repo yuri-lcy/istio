@@ -1538,11 +1538,7 @@ func (ps *PushContext) initVirtualServices(env *Environment) {
 				for _, gw := range gwNames {
 					ps.virtualServiceIndex.publicByGateway[gw] = append(ps.virtualServiceIndex.publicByGateway[gw], virtualService)
 				}
-				continue
-			} else if exportToMap[visibility.None] {
-				// not possible
-				continue
-			} else {
+			} else if !exportToMap[visibility.None] {
 				// . or other namespaces
 				for exportTo := range exportToMap {
 					if exportTo == visibility.Private || string(exportTo) == ns {
