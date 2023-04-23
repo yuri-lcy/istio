@@ -40,7 +40,7 @@ func initWorkloadCache(opts *Options) *workloadCache {
 		return hasType
 	})
 
-	if err, _ := opts.Client.KubeInformer().Core().V1().Pods().Informer().AddEventHandler(proxyHandler); err != nil {
+	if _, err := opts.Client.KubeInformer().Core().V1().Pods().Informer().AddEventHandler(proxyHandler); err != nil {
 		log.Errorf("initWorkloadCache failed %v", err)
 		return nil
 	}

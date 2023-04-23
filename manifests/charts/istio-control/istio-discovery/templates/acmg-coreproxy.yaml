@@ -65,10 +65,10 @@ spec:
       containers:
       - args:
         - proxy
-        - sidecar
+        - coreproxy
         - --domain
         - $(POD_NAMESPACE).svc.cluster.local
-        - --proxyLogLevel=trace
+        - --proxyLogLevel=debug
         - --proxyComponentLogLevel=misc:error
         - --trust-domain=cluster.local
         - --concurrency

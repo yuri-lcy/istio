@@ -279,8 +279,8 @@ spec:
               path: /healthz/ready
           args:
             - proxy
-            - sidecar
-            - --proxyLogLevel=trace
+            - nodeproxy
+            - --proxyLogLevel=debug
           env:
             - name: ISTIO_META_GENERATOR
               value: "nodeproxy-envoy"

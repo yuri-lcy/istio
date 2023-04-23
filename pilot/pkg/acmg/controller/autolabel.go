@@ -55,7 +55,7 @@ func (a *AutoLabel) initAutoLabel(opts *Options) {
 	}
 	log.Infof("Starting acmg mesh auto-labeler")
 
-	if err, _ := opts.Client.KubeInformer().Core().V1().Namespaces().Informer().AddEventHandler(a.labeledNamespaceInformer()); err != nil {
+	if _, err := opts.Client.KubeInformer().Core().V1().Namespaces().Informer().AddEventHandler(a.labeledNamespaceInformer()); err != nil {
 		log.Errorf("initAcmgAutoLabel failed %v", err)
 		return
 	}
@@ -70,7 +70,7 @@ func (a *AutoLabel) initAutoLabel(opts *Options) {
 
 	ignored := sets.New(append(strings.Split(features.AcmgAutoLabelIgnore, ","), opts.SystemNamespace)...)
 	workloadHandler := controllers.FilteredObjectHandler(podQueue.AddObject, a.acmgPodLabelFilter(ignored))
-	if err, _ := opts.Client.KubeInformer().Core().V1().Pods().Informer().AddEventHandler(workloadHandler); err != nil {
+	if _, err := opts.Client.KubeInformer().Core().V1().Pods().Informer().AddEventHandler(workloadHandler); err != nil {
 		log.Errorf("initAcmgAutoLabel failed %v", err)
 		return
 	}

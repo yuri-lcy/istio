@@ -993,7 +993,7 @@ func (ps *PushContext) getSidecarScope(proxy *Proxy, workloadLabels labels.Insta
 		computed := DefaultSidecarScopeForNamespace(ps, proxy.ConfigNamespace)
 		ps.sidecarIndex.defaultSidecarsByNamespace[proxy.ConfigNamespace] = computed
 		return computed
-	case SidecarProxy:
+	case SidecarProxy, CoreProxy, NodeProxy:
 		if hasSidecar {
 			for _, wrapper := range sidecars {
 				if wrapper.Sidecar != nil {

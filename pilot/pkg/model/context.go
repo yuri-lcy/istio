@@ -882,6 +882,8 @@ func (node *Proxy) SetSidecarScope(ps *PushContext) {
 	case Router, Waypoint:
 		// Gateways should just have a default scope with egress: */*
 		node.SidecarScope = ps.getSidecarScope(node, nil)
+	case CoreProxy, NodeProxy:
+		node.SidecarScope = ps.getSidecarScope(node, nil)
 	}
 	node.PrevSidecarScope = sidecarScope
 }

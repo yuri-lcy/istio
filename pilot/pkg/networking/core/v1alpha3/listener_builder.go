@@ -114,14 +114,11 @@ func (lb *ListenerBuilder) WithAcmgWorkload(wl acmg.Workload) *ListenerBuilder {
 }
 
 func (lb *ListenerBuilder) appendSidecarInboundListeners() *ListenerBuilder {
-	if lb.node.IsCoreProxy() {
-		lb.inboundListeners = lb.buildCoreProxyInbound()
-	} else {
-		lb.inboundListeners = lb.buildInboundListeners()
-		if lb.node.EnableHBONE() {
-			lb.inboundListeners = append(lb.inboundListeners, lb.buildInboundHBONEListeners()...)
-		}
+	lb.inboundListeners = lb.buildInboundListeners()
+	if lb.node.EnableHBONE() {
+		lb.inboundListeners = append(lb.inboundListeners, lb.buildInboundHBONEListeners()...)
 	}
+
 	return lb
 }
 
