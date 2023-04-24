@@ -442,7 +442,7 @@ func buildEnvoyLbEndpoint(b *EndpointBuilder, e *model.IstioEndpoint) *endpoint.
 	}
 
 	// Setup tunnel information, if needed
-	if b.dir == model.TrafficDirectionInboundVIP {
+	if b.dir == model.TrafficDirectionInboundVIP && !b.proxy.IsAcmg() {
 		// This is only used in waypoint proxy
 		inScope := waypointInScope(b.proxy, e)
 		if !inScope {
