@@ -33,6 +33,7 @@ spec:
       annotations:
         sidecar.istio.io/inject: "false"
         ambient.istio.io/redirection: disabled
+        acmg.istio.io/redirection: disabled
         # Add Prometheus Scrape annotations
         prometheus.io/scrape: 'true'
         prometheus.io/port: "15014"
@@ -43,6 +44,7 @@ spec:
         {{- end }}
     spec:
       {{if .Values.cni.ambient.enabled }}hostNetwork: true{{ end }}
+      {{if .Values.cni.acmg.enabled }}hostNetwork: true{{ end }}
       nodeSelector:
         kubernetes.io/os: linux
       # Can be configured to allow for excluding instio-cni from being scheduled on specified nodes
@@ -150,6 +152,14 @@ spec:
               value: "true"
             {{- end }}
             {{- end }}
+            {{- if .Values.cni.acmg.enabled }}
+            - name: ACMG_ENABLED
+              value: "true"
+            {{- if eq .Values.cni.acmg.redirectMode "ebpf"}}
+            - name: EBPF_ENABLED
+              value: "true"
+            {{- end }}
+            {{- end }}
           volumeMounts:
             - mountPath: /host/opt/cni/bin
               name: cni-bin-dir
@@ -169,6 +179,18 @@ spec:
               name: cni-bpffs-dir
             {{- end }}
             {{ end }}
+            {{- if .Values.cni.acmg.enabled }}
+            - mountPath: /etc/acmg-config
+              name: cni-acmgconfig
+            - mountPath: /var/run/netns
+              mountPropagation: HostToContainer
+              name: cni-netns-dir
+            {{- if eq .Values.cni.acmg.redirectMode "ebpf"}}
+            - mountPath: /sys/fs/bpf
+              mountPropagation: Bidirectional
+              name: cni-acmg-bpffs-dir
+            {{- end }}
+            {{ end }}
           resources:
 {{- if .Values.cni.resources }}
 {{ toYaml .Values.cni.resources | trim | indent 12 }}
@@ -184,6 +206,16 @@ spec:
         - name: cni-ambientconfig
           hostPath:
             path: /etc/ambient-config
+        {{- end }}
+        {{- if .Values.cni.acmg.enabled }}
+        - name: cni-acmgconfig
+          hostPath:
+            path: /etc/acmg-config
+        {{- end }}
+        {{- if eq .Values.cni.acmg.redirectMode "ebpf"}}
+        - name: cni-acmg-bpffs-dir
+          hostPath:
+            path: /sys/fs/bpf
         {{- end }}
         - name: cni-net-dir
           hostPath:

@@ -90,8 +90,11 @@ func (a *AutoLabel) addPodToQueue(ns *v1.Namespace) {
 		log.Errorf("Failed to list namespaces %v pods %v", ns, err)
 		return
 	}
-	for pod := range pods {
-		a.podQueue.Add(pod)
+	for _, pod := range pods {
+		a.podQueue.Add(types.NamespacedName{
+			Namespace: pod.GetNamespace(),
+			Name:      pod.GetName(),
+		})
 	}
 }
 

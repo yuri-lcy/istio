@@ -47,6 +47,27 @@ func flushAllRouteTables() {
 	_ = routeFlushTable(constants.RouteTableProxy)
 }
 
+func routeFlushTable(table int) error {
+	routes, err := netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{Table: table}, netlink.RT_FILTER_TABLE)
+	if err != nil {
+		return err
+	}
+	// default route is not handled proper in netlink
+	// https://github.com/vishvananda/netlink/issues/670
+	// https://github.com/vishvananda/netlink/issues/611
+	for i, route := range routes {
+		if (route.Dst == nil || route.Dst.IP == nil) && route.Src == nil && route.Gw == nil && route.MPLSDst == nil {
+			_, defaultDst, _ := net.ParseCIDR("0.0.0.0/0")
+			routes[i].Dst = defaultDst
+		}
+	}
+	err = routesDelete(routes)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // This can be called on the node, as part of termination/cleanup,
 // or it can be called from within a pod netns, as a "clean slate" prep.
 func deleteTunnelLinks(inboundName, outboundName string, warnOnFail bool) {
@@ -260,7 +281,7 @@ func (s *Server) delNodeProxyEbpfOnNode() error {
 // everything within the netns goes away.
 func (s *Server) CreateRulesWithinNodeProxyNS(proxyNsVethIdx int, nodeProxyIP, nodeProxyNetNS, hostIP string) error {
 	ns := filepath.Base(nodeProxyNetNS)
-	log.Debugf("CreateRulesWithinNodeProxyNS: proxyNsVethIdx=%d, ztunnelIP=%s, hostIP=%s, from within netns=%s", proxyNsVethIdx, nodeProxyIP, hostIP, nodeProxyNetNS)
+	log.Debugf("CreateRulesWithinNodeProxyNS: proxyNsVethIdx=%d, nodeProxyIP=%s, hostIP=%s, from within netns=%s", proxyNsVethIdx, nodeProxyIP, hostIP, nodeProxyNetNS)
 	err := netns.WithNetNSPath(fmt.Sprintf("/var/run/netns/%s", ns), func(netns.NetNS) error {
 		//"p" is just to visually distinguish from the host-side tunnel links in logs
 		inboundGeneveLinkName := "p" + constants.InboundTun

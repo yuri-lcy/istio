@@ -193,7 +193,7 @@ func (s *Server) ReconcileNodeProxy() error {
 		// Create node-level networking rules for redirection
 		err = s.CreateRulesOnNode(veth.Attrs().Name, activePod.Status.PodIP, captureDNS)
 		if err != nil {
-			return fmt.Errorf("failed to configure node for ztunnel: %v", err)
+			return fmt.Errorf("failed to configure node for nodeproxy: %v", err)
 		}
 		// Collect info needed to jump into node proxy netns and configure it.
 		peerNs, err := getNsNameFromNsID(veth.Attrs().NetNsID)
@@ -211,7 +211,7 @@ func (s *Server) ReconcileNodeProxy() error {
 		// Create pod-level networking rules for redirection (from within pod netns)
 		err = s.CreateRulesWithinNodeProxyNS(peerIndex, activePod.Status.PodIP, peerNs, hostIP)
 		if err != nil {
-			return fmt.Errorf("failed to configure node for ztunnel: %v", err)
+			return fmt.Errorf("failed to configure node for nodeproxy: %v", err)
 		}
 	case EbpfMode:
 		h, err := GetHostIPByRoute(s.pods)
@@ -231,7 +231,7 @@ func (s *Server) ReconcileNodeProxy() error {
 			return fmt.Errorf("failed to configure ztunnel: %v", err)
 		}
 	}
-
+	
 	// Reconcile namespaces, as it is possible for the original reconciliation to have failed, and a
 	// small pod to have started up before ztunnel is running... so we need to go back and make sure we
 	// catch the existing pods

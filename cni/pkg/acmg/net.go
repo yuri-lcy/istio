@@ -698,18 +698,6 @@ func (s *Server) cleanup() {
 	_ = Ipset.DestroySet()
 }
 
-func routeFlushTable(table int) error {
-	routes, err := netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{Table: table}, netlink.RT_FILTER_TABLE)
-	if err != nil {
-		return err
-	}
-	err = routesDelete(routes)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 func routesDelete(routes []netlink.Route) error {
 	for _, r := range routes {
 		err := netlink.RouteDel(&r)

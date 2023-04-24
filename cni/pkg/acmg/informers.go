@@ -16,7 +16,7 @@ package acmg
 
 import (
 	"fmt"
-	"istio.io/istio/cni/pkg/ambient/ambientpod"
+	"istio.io/istio/pilot/pkg/acmg/acmgpod"
 	"istio.io/istio/pkg/config/constants"
 	"istio.io/istio/pkg/kube/controllers"
 	"istio.io/istio/pkg/kube/kclient"
@@ -61,10 +61,11 @@ func (s *Server) ReconcileNamespaces() {
 // EnqueueNamespace takes a Namespace and enqueues all Pod objects that make need an update
 func (s *Server) EnqueueNamespace(o controllers.Object) {
 	namespace := o.GetName()
-	matchAmbient := o.GetLabels()[constants.DataplaneMode] == constants.DataplaneModeAcmg
-	if matchAmbient {
+	matchAcmg := o.GetLabels()[constants.DataplaneMode] == constants.DataplaneModeAcmg
+	if matchAcmg {
 		log.Infof("Namespace %s is enabled in acmg mesh", namespace)
 		for _, pod := range s.pods.List(namespace, klabels.Everything()) {
+			log.Infof("Add namespace %s %v to queue", namespace, pod.Name)
 			s.queue.Add(controllers.Event{
 				New:   pod,
 				Old:   pod,
@@ -86,6 +87,7 @@ func (s *Server) Reconcile(input any) error {
 	event := input.(controllers.Event)
 	log := log.WithLabels("type", event.Event)
 	pod := event.Latest().(*corev1.Pod)
+	log.Infof("Reconcile Pod %v %v", pod.Namespace, pod.Name)
 	if nodeProxyPod(pod) {
 		return s.ReconcileNodeProxy()
 	}
@@ -100,7 +102,8 @@ func (s *Server) Reconcile(input any) error {
 			return fmt.Errorf("failed to find namespace %v", ns)
 		}
 		wasEnabled := oldPod.Annotations[constants.AcmgRedirection] == constants.AcmgRedirectionEnabled
-		nowEnabled := ambientpod.PodZtunnelEnabled(ns, newPod)
+		nowEnabled := acmgpod.PodNodeProxyEnabled(ns, newPod)
+		log.Infof("Pod %v %v wasEnabled: %v nowEnabled: %v", pod.Namespace, pod.Name, wasEnabled, nowEnabled)
 		if wasEnabled && !nowEnabled {
 			log.Debugf("Pod %s no longer matches, removing from mesh", newPod.Name)
 			s.DelPodFromMesh(newPod)
