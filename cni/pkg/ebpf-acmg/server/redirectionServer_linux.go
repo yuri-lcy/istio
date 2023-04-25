@@ -289,7 +289,7 @@ func (r *RedirectServer) handleRequest(args *RedirectArgs) error {
 	macAddr := args.MacAddr
 	ifindex := uint32(args.Ifindex)
 	peerIndex := uint32(args.PeerIndex)
-	ztunnel := args.IsNodeProxy
+	nodeproxy := args.IsNodeProxy
 	namespace := args.PeerNs
 	remove := args.Remove
 
@@ -301,7 +301,7 @@ func (r *RedirectServer) handleRequest(args *RedirectArgs) error {
 		copy(mapInfo.MacAddr[:], macAddr)
 	}
 
-	if ztunnel {
+	if nodeproxy {
 		if remove {
 			if ifindex != 0 && namespace != "" {
 				if err := r.detachTCForNodeProxy(ifindex, peerIndex, namespace); err != nil {

@@ -227,7 +227,7 @@ int app_inbound(struct __sk_buff *skb)
     return bpf_redirect(np->ifindex, 0);
 }
 
-// For ztunnel pod veth pair(in host ns) ingress hook
+// For nodeproxy pod veth pair(in host ns) ingress hook
 SEC("tc")
 int nodeproxy_host_ingress(struct __sk_buff *skb)
 {
@@ -255,7 +255,7 @@ int nodeproxy_host_ingress(struct __sk_buff *skb)
     pi = get_app_info_from_ipv4(iph->daddr);
     if (!pi) {
         // ip is not in ambient managed mesh
-        // dbg("ztunnel_host_ingress unable to retrieve pod info: 0x%x\n", bpf_ntohl(iph->daddr));
+        // dbg("nodeproxy_host_ingress unable to retrieve pod info: 0x%x\n", bpf_ntohl(iph->daddr));
         return TC_ACT_OK;
     }
 

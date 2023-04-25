@@ -495,6 +495,7 @@ nodeproxy:
   hub: ""
   tag: ""
   variant: ""
+  redirectMode: ""
 
   # Can be a full hub/image:tag
   image: acmg-registry.us-west-1.cr.aliyuncs.com/istio-testing/proxyv2:0.1-dev

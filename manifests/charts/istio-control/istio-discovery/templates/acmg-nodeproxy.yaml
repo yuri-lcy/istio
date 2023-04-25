@@ -83,6 +83,7 @@ spec:
             capabilities:
               add:
                 - NET_ADMIN
+{{- if eq .Values.nodeproxy.redirectMode "iptables"}}
           command:
             - sh
             - -c
@@ -234,6 +235,7 @@ spec:
               echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter
               echo 0 > /proc/sys/net/ipv4/conf/default/rp_filter
               echo 0 > /proc/sys/net/ipv4/conf/eth0/rp_filter
+{{- end }}
           env:
             - name: INSTANCE_IP
               valueFrom:

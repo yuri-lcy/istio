@@ -93,8 +93,9 @@ message CNIConfig {
 }
 
 message CNIAcmgConfig {
-  // Controls whether ambient redirection is enabled
+  // Controls whether acmg redirection is enabled
   google.protobuf.BoolValue enabled = 1;
+  string redirectMode = 2;
 }
 
 message CNIAmbientConfig {
