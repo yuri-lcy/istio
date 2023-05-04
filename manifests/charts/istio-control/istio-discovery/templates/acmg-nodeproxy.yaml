@@ -283,6 +283,7 @@ spec:
             - proxy
             - nodeproxy
             - --proxyLogLevel=debug
+            - --log_output_level=default:debug,cache:debug
           env:
             - name: ISTIO_META_GENERATOR
               value: "nodeproxy-envoy"

@@ -9,6 +9,7 @@ import (
 	tcp "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
 	tls "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
+	any "google.golang.org/protobuf/types/known/anypb"
 	wrappers "google.golang.org/protobuf/types/known/wrapperspb"
 	networking "istio.io/api/networking/v1alpha3"
 	"istio.io/istio/pilot/pkg/acmg"
@@ -16,6 +17,8 @@ import (
 	"istio.io/istio/pilot/pkg/model"
 	istionetworking "istio.io/istio/pilot/pkg/networking"
 	"istio.io/istio/pilot/pkg/networking/core/v1alpha3/match"
+	istio_route "istio.io/istio/pilot/pkg/networking/core/v1alpha3/route"
+	"istio.io/istio/pilot/pkg/networking/core/v1alpha3/route/retry"
 	"istio.io/istio/pilot/pkg/networking/plugin/authn"
 	"istio.io/istio/pilot/pkg/networking/util"
 	istiomatcher "istio.io/istio/pilot/pkg/security/authz/matcher"
@@ -27,6 +30,7 @@ import (
 	"istio.io/istio/pkg/config/labels"
 	"istio.io/istio/pkg/config/protocol"
 	"istio.io/istio/pkg/proto"
+	"istio.io/istio/pkg/util/sets"
 	"istio.io/pkg/log"
 	"strconv"
 )
@@ -213,6 +217,199 @@ func (lb *ListenerBuilder) buildCoreProxyInboundPod(wls []LabeledWorkloadAndServ
 	return listeners
 }
 
+func (lb *ListenerBuilder) coreProxyServiceForHostname(name host.Name) *model.Service {
+	return lb.push.ServiceForHostname(lb.node, name)
+}
+
+func (lb *ListenerBuilder) coreProxyRouteDestination(out *route.Route, in *networking.HTTPRoute, authority string, listenerPort int) {
+	policy := in.Retries
+	if policy == nil {
+		// No VS policy set, use mesh defaults
+		policy = lb.push.Mesh.GetDefaultHttpRetryPolicy()
+	}
+	action := &route.RouteAction{
+		Cors:        istio_route.TranslateCORSPolicy(in.CorsPolicy),
+		RetryPolicy: retry.ConvertPolicy(policy),
+	}
+
+	// Configure timeouts specified by Virtual Service if they are provided, otherwise set it to defaults.
+	action.Timeout = features.DefaultRequestTimeout
+	if in.Timeout != nil {
+		action.Timeout = in.Timeout
+	}
+	// Use deprecated value for now as the replacement MaxStreamDuration has some regressions.
+	// nolint: staticcheck
+	action.MaxGrpcTimeout = action.Timeout
+
+	out.Action = &route.Route_Route{Route: action}
+
+	if in.Rewrite != nil {
+		action.PrefixRewrite = in.Rewrite.GetUri()
+		if in.Rewrite.GetAuthority() != "" {
+			authority = in.Rewrite.GetAuthority()
+		}
+	}
+	if authority != "" {
+		action.HostRewriteSpecifier = &route.RouteAction_HostRewriteLiteral{
+			HostRewriteLiteral: authority,
+		}
+	}
+
+	if in.Mirror != nil {
+		if mp := istio_route.MirrorPercent(in); mp != nil {
+			action.RequestMirrorPolicies = []*route.RouteAction_RequestMirrorPolicy{{
+				Cluster:         lb.GetDestinationCluster(in.Mirror, lb.coreProxyServiceForHostname(host.Name(in.Mirror.Host)), listenerPort),
+				RuntimeFraction: mp,
+				TraceSampled:    &wrappers.BoolValue{Value: false},
+			}}
+		}
+	}
+
+	// TODO: eliminate this logic and use the total_weight option in envoy route
+	weighted := make([]*route.WeightedCluster_ClusterWeight, 0)
+	for _, dst := range in.Route {
+		weight := &wrappers.UInt32Value{Value: uint32(dst.Weight)}
+		if dst.Weight == 0 {
+			// Ignore 0 weighted clusters if there are other clusters in the route.
+			// But if this is the only cluster in the route, then add it as a cluster with weight 100
+			if len(in.Route) == 1 {
+				weight.Value = uint32(100)
+			} else {
+				continue
+			}
+		}
+		hostname := host.Name(dst.GetDestination().GetHost())
+		n := lb.coreProxyGetDestinationCluster(dst.Destination, lb.serviceForHostname(hostname), listenerPort)
+		clusterWeight := &route.WeightedCluster_ClusterWeight{
+			Name:   n,
+			Weight: weight,
+		}
+		if dst.Headers != nil {
+			operations := istio_route.TranslateHeadersOperations(dst.Headers)
+			clusterWeight.RequestHeadersToAdd = operations.RequestHeadersToAdd
+			clusterWeight.RequestHeadersToRemove = operations.RequestHeadersToRemove
+			clusterWeight.ResponseHeadersToAdd = operations.ResponseHeadersToAdd
+			clusterWeight.ResponseHeadersToRemove = operations.ResponseHeadersToRemove
+			if operations.Authority != "" {
+				clusterWeight.HostRewriteSpecifier = &route.WeightedCluster_ClusterWeight_HostRewriteLiteral{
+					HostRewriteLiteral: operations.Authority,
+				}
+			}
+		}
+
+		weighted = append(weighted, clusterWeight)
+	}
+
+	// rewrite to a single cluster if there is only weighted cluster
+	if len(weighted) == 1 {
+		action.ClusterSpecifier = &route.RouteAction_Cluster{Cluster: weighted[0].Name}
+		out.RequestHeadersToAdd = append(out.RequestHeadersToAdd, weighted[0].RequestHeadersToAdd...)
+		out.RequestHeadersToRemove = append(out.RequestHeadersToRemove, weighted[0].RequestHeadersToRemove...)
+		out.ResponseHeadersToAdd = append(out.ResponseHeadersToAdd, weighted[0].ResponseHeadersToAdd...)
+		out.ResponseHeadersToRemove = append(out.ResponseHeadersToRemove, weighted[0].ResponseHeadersToRemove...)
+		if weighted[0].HostRewriteSpecifier != nil && action.HostRewriteSpecifier == nil {
+			// Ideally, if the weighted cluster overwrites authority, it has precedence. This mirrors behavior of headers,
+			// because for headers we append the weighted last which allows it to Set and wipe out previous Adds.
+			// However, Envoy behavior is different when we set at both cluster level and route level, and we want
+			// behavior to be consistent with a single cluster and multiple clusters.
+			// As a result, we only override if the top level rewrite is not set
+			action.HostRewriteSpecifier = &route.RouteAction_HostRewriteLiteral{
+				HostRewriteLiteral: weighted[0].GetHostRewriteLiteral(),
+			}
+		}
+	} else {
+		action.ClusterSpecifier = &route.RouteAction_WeightedClusters{
+			WeightedClusters: &route.WeightedCluster{
+				Clusters: weighted,
+			},
+		}
+	}
+}
+
+// GetDestinationCluster generates a cluster name for the route, or error if no cluster
+// can be found. Called by translateRule to determine if
+func (lb *ListenerBuilder) coreProxyGetDestinationCluster(destination *networking.Destination, service *model.Service, listenerPort int) string {
+	dir, subset, port := model.TrafficDirectionInboundVIP, "http", listenerPort
+	if destination.Subset != "" {
+		subset += "/" + destination.Subset
+	}
+	if destination.GetPort() != nil {
+		port = int(destination.GetPort().GetNumber())
+	} else if service != nil && len(service.Ports) == 1 {
+		// if service only has one port defined, use that as the port, otherwise use default listenerPort
+		port = service.Ports[0].Port
+
+		// Do not return blackhole cluster for service==nil case as there is a legitimate use case for
+		// calling this function with nil service: to route to a pre-defined statically configured cluster
+		// declared as part of the bootstrap.
+		// If blackhole cluster is needed, do the check on the caller side. See gateway and tls.go for examples.
+	}
+
+	// this waypoint proxy isn't responsible for this service so we use outbound; TODO quicker svc account check
+	if service != nil && lb.node.VerifiedIdentity != nil && (service.MeshExternal ||
+		!sets.New[string](lb.push.ServiceAccounts(service.Hostname, service.Attributes.Namespace, port)...).Contains(lb.node.VerifiedIdentity.String())) {
+		dir, subset = model.TrafficDirectionOutbound, destination.Subset
+	}
+
+	return model.BuildSubsetKey(
+		dir,
+		subset,
+		host.Name(destination.Host),
+		port,
+	)
+}
+
+func (lb *ListenerBuilder) coreProxyTranslateRoute(
+	virtualService config.Config,
+	in *networking.HTTPRoute,
+	match *networking.HTTPMatchRequest,
+	listenPort int,
+) *route.Route {
+	// When building routes, it's okay if the target cluster cannot be
+	// resolved Traffic to such clusters will blackhole.
+
+	// Match by the destination port specified in the match condition
+	if match != nil && match.Port != 0 && match.Port != uint32(listenPort) {
+		return nil
+	}
+
+	routeName := in.Name
+	if match != nil && match.Name != "" {
+		routeName = routeName + "." + match.Name
+	}
+
+	out := &route.Route{
+		Name:     routeName,
+		Match:    istio_route.TranslateRouteMatch(virtualService, match),
+		Metadata: util.BuildConfigInfoMetadata(virtualService.Meta),
+	}
+	authority := ""
+	if in.Headers != nil {
+		operations := istio_route.TranslateHeadersOperations(in.Headers)
+		out.RequestHeadersToAdd = operations.RequestHeadersToAdd
+		out.ResponseHeadersToAdd = operations.ResponseHeadersToAdd
+		out.RequestHeadersToRemove = operations.RequestHeadersToRemove
+		out.ResponseHeadersToRemove = operations.ResponseHeadersToRemove
+		authority = operations.Authority
+	}
+
+	if in.Redirect != nil {
+		istio_route.ApplyRedirect(out, in.Redirect, listenPort, false, model.UseGatewaySemantics(virtualService))
+	} else {
+		lb.coreProxyRouteDestination(out, in, authority, listenPort)
+	}
+
+	out.Decorator = &route.Decorator{
+		Operation: istio_route.GetRouteOperation(out, virtualService.Name, listenPort),
+	}
+	if in.Fault != nil {
+		out.TypedPerFilterConfig = make(map[string]*any.Any)
+		out.TypedPerFilterConfig[wellknown.Fault] = protoconv.MessageToAny(istio_route.TranslateFault(in.Fault))
+	}
+
+	return out
+}
+
 func (lb *ListenerBuilder) coreproxyInboundRoute(virtualService config.Config, listenPort int) ([]*route.Route, error) {
 	vs, ok := virtualService.Spec.(*networking.VirtualService)
 	if !ok { // should never happen
@@ -224,13 +421,13 @@ func (lb *ListenerBuilder) coreproxyInboundRoute(virtualService config.Config, l
 	catchall := false
 	for _, http := range vs.Http {
 		if len(http.Match) == 0 {
-			if r := lb.translateRoute(virtualService, http, nil, listenPort); r != nil {
+			if r := lb.coreProxyTranslateRoute(virtualService, http, nil, listenPort); r != nil {
 				out = append(out, r)
 			}
 			catchall = true
 		} else {
 			for _, match := range http.Match {
-				if r := lb.translateRoute(virtualService, http, match, listenPort); r != nil {
+				if r := lb.coreProxyTranslateRoute(virtualService, http, match, listenPort); r != nil {
 					out = append(out, r)
 					// This is a catch all path. Routes are matched in order, so we will never go beyond this match
 					// As an optimization, we can just top sending any more routes here.
@@ -254,6 +451,7 @@ func (lb *ListenerBuilder) coreproxyInboundRoute(virtualService config.Config, l
 
 func buildCoreProxyInboundHTTPRouteConfig(lb *ListenerBuilder, svc *model.Service, cc inboundChainConfig) *route.RouteConfiguration {
 	vss := getConfigsForHost(svc.Hostname, lb.node.SidecarScope.EgressListeners[0].VirtualServices())
+	log.Debugf("buildCoreProxyInboundHTTPRouteConfig virtualService %v %v", svc.Hostname, len(vss))
 	if len(vss) == 0 {
 		return buildSidecarInboundHTTPRouteConfig(lb, cc)
 	}
