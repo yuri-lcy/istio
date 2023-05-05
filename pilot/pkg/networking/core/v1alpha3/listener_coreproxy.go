@@ -30,7 +30,6 @@ import (
 	"istio.io/istio/pkg/config/labels"
 	"istio.io/istio/pkg/config/protocol"
 	"istio.io/istio/pkg/proto"
-	"istio.io/istio/pkg/util/sets"
 	"istio.io/pkg/log"
 	"strconv"
 )
@@ -344,10 +343,8 @@ func (lb *ListenerBuilder) coreProxyGetDestinationCluster(destination *networkin
 		// declared as part of the bootstrap.
 		// If blackhole cluster is needed, do the check on the caller side. See gateway and tls.go for examples.
 	}
-
-	// this waypoint proxy isn't responsible for this service so we use outbound; TODO quicker svc account check
-	if service != nil && lb.node.VerifiedIdentity != nil && (service.MeshExternal ||
-		!sets.New[string](lb.push.ServiceAccounts(service.Hostname, service.Attributes.Namespace, port)...).Contains(lb.node.VerifiedIdentity.String())) {
+	// coreproxy used by all services
+	if service != nil && lb.node.VerifiedIdentity != nil && service.MeshExternal {
 		dir, subset = model.TrafficDirectionOutbound, destination.Subset
 	}
 
@@ -451,7 +448,6 @@ func (lb *ListenerBuilder) coreproxyInboundRoute(virtualService config.Config, l
 
 func buildCoreProxyInboundHTTPRouteConfig(lb *ListenerBuilder, svc *model.Service, cc inboundChainConfig) *route.RouteConfiguration {
 	vss := getConfigsForHost(svc.Hostname, lb.node.SidecarScope.EgressListeners[0].VirtualServices())
-	log.Debugf("buildCoreProxyInboundHTTPRouteConfig virtualService %v %v", svc.Hostname, len(vss))
 	if len(vss) == 0 {
 		return buildSidecarInboundHTTPRouteConfig(lb, cc)
 	}
