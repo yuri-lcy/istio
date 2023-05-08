@@ -18,9 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
 	"google.golang.org/grpc/credentials"
-
 	"istio.io/istio/pkg/security"
 	"istio.io/istio/security/pkg/nodeagent/plugin/providers/google/stsclient"
 	"istio.io/istio/security/pkg/stsservice"
@@ -55,7 +53,7 @@ func (t *TokenProvider) GetRequestMetadata(ctx context.Context, uri ...string) (
 	if t == nil {
 		return nil, nil
 	}
-	token, err := t.GetToken()
+	token, err := t.GetToken(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -82,11 +80,11 @@ func (t *TokenProvider) RequireTransportSecurity() bool {
 // token is missing (for example, on a VM that has rebooted, causing the token to be removed from
 // volatile memory), we can still proceed and allow other authentication methods to potentially
 // handle the request, such as mTLS.
-func (t *TokenProvider) GetToken() (string, error) {
+func (t *TokenProvider) GetToken(ctx context.Context) (string, error) {
 	if t.opts.CredFetcher == nil {
 		return "", nil
 	}
-	token, err := t.opts.CredFetcher.GetPlatformCredential()
+	token, err := t.opts.CredFetcher.GetPlatformCredential(ctx)
 	if err != nil {
 		return "", fmt.Errorf("fetch platform credential: %v", err)
 	}

@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"google.golang.org/grpc/metadata"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,7 +123,7 @@ type SecretManagerClient struct {
 
 type secretCache struct {
 	mu       sync.RWMutex
-	workload *security.SecretItem
+	workload map[string]*security.SecretItem
 	certRoot []byte
 }
 
@@ -140,19 +141,19 @@ func (s *secretCache) SetRoot(rootCert []byte) {
 	s.certRoot = rootCert
 }
 
-func (s *secretCache) GetWorkload() *security.SecretItem {
+func (s *secretCache) GetWorkload(key string) *security.SecretItem {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.workload == nil {
+	if s.workload[key] == nil {
 		return nil
 	}
-	return s.workload
+	return s.workload[key]
 }
 
-func (s *secretCache) SetWorkload(value *security.SecretItem) {
+func (s *secretCache) SetWorkload(key string, value *security.SecretItem) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.workload = value
+	s.workload[key] = value
 }
 
 var _ security.SecretManager = &SecretManagerClient{}
@@ -183,6 +184,9 @@ func NewSecretManagerClient(caClient security.Client, options *security.Options)
 		fileCerts:   make(map[FileCert]struct{}),
 		stop:        make(chan struct{}),
 		caRootPath:  options.CARootPath,
+		cache: secretCache{
+			workload: map[string]*security.SecretItem{},
+		},
 	}
 
 	go ret.queue.Run(ret.stop)
@@ -217,7 +221,7 @@ func (sc *SecretManagerClient) getCachedSecret(resourceName string) (secret *sec
 	var rootCertBundle []byte
 	var ns *security.SecretItem
 
-	if c := sc.cache.GetWorkload(); c != nil {
+	if c := sc.cache.GetWorkload(resourceName); c != nil {
 		if resourceName == security.RootCertReqResourceName {
 			rootCertBundle = sc.mergeTrustAnchorBytes(c.RootCert)
 			ns = &security.SecretItem{
@@ -559,6 +563,8 @@ func (sc *SecretManagerClient) generateFileSecret(resourceName string) (bool, *s
 }
 
 func (sc *SecretManagerClient) generateNewSecret(resourceName string) (*security.SecretItem, error) {
+	cacheLog.Debugf("generate New Secret for %s", resourceName)
+
 	trustBundlePEM := []string{}
 	var rootCertPEM []byte
 
@@ -572,6 +578,20 @@ func (sc *SecretManagerClient) generateNewSecret(resourceName string) (*security
 		TrustDomain:    sc.configOptions.TrustDomain,
 		Namespace:      sc.configOptions.WorkloadNamespace,
 		ServiceAccount: sc.configOptions.ServiceAccount,
+	}
+
+	var uid string
+	var podName string
+	if override, err := spiffe.ParseIdentity(resourceName); err == nil {
+		// resource name is a direct spiffe identity, so we should use that
+		// TODO: should we check that we have permissions here?
+		if strings.Contains(override.ServiceAccount, "~") {
+			spl := strings.SplitN(override.ServiceAccount, "~", 3)
+			override.ServiceAccount = spl[0]
+			podName = spl[1]
+			uid = spl[2]
+		}
+		csrHostName = &override
 	}
 
 	cacheLog.Debugf("constructed host name for CSR: %s", csrHostName.String())
@@ -590,8 +610,15 @@ func (sc *SecretManagerClient) generateNewSecret(resourceName string) (*security
 	}
 
 	numOutgoingRequests.With(RequestType.Value(monitoring.CSR)).Increment()
+
+	ctx := metadata.NewOutgoingContext(context.Background(),
+		metadata.Pairs(
+			"SAN", csrHostName.String(),
+			"UID", uid,
+			"POD", podName,
+		))
 	timeBeforeCSR := time.Now()
-	certChainPEM, err := sc.caClient.CSRSign(csrPEM, int64(sc.configOptions.SecretTTL.Seconds()))
+	certChainPEM, err := sc.caClient.CSRSign(ctx, csrPEM, int64(sc.configOptions.SecretTTL.Seconds()))
 	if err == nil {
 		trustBundlePEM, err = sc.caClient.GetRootCertBundle()
 	}
@@ -648,16 +675,16 @@ func (sc *SecretManagerClient) registerSecret(item security.SecretItem) {
 	certExpirySeconds.ValueFrom(func() float64 { return time.Until(item.ExpireTime).Seconds() }, item.ResourceName)
 	item.ResourceName = security.WorkloadKeyCertResourceName
 	// In case there are two calls to GenerateSecret at once, we don't want both to be concurrently registered
-	if sc.cache.GetWorkload() != nil {
+	if sc.cache.GetWorkload(item.ResourceName) != nil {
 		resourceLog(item.ResourceName).Infof("skip scheduling certificate rotation, already scheduled")
 		return
 	}
-	sc.cache.SetWorkload(&item)
+	sc.cache.SetWorkload(item.ResourceName, &item)
 	resourceLog(item.ResourceName).Debugf("scheduled certificate for rotation in %v", delay)
 	sc.queue.PushDelayed(func() error {
 		resourceLog(item.ResourceName).Debugf("rotating certificate")
 		// Clear the cache so the next call generates a fresh certificate
-		sc.cache.SetWorkload(nil)
+		sc.cache.SetWorkload(item.ResourceName, nil)
 
 		sc.OnSecretUpdate(item.ResourceName)
 		return nil

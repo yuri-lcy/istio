@@ -100,6 +100,8 @@ const (
 	// JWT is a Credential fetcher type that reads from a JWT token file
 	JWT = "JWT"
 
+	TokenRequest = "TokenRequest"
+
 	// Mock is Credential fetcher type of mock plugin
 	Mock = "Mock" // testing only
 
@@ -305,7 +307,7 @@ type StsRequestParameters struct {
 // interface to get back a signed certificate. There is no guarantee that the SAN
 // in the request will be returned - server may replace it.
 type Client interface {
-	CSRSign(csrPEM []byte, certValidTTLInSec int64) ([]string, error)
+	CSRSign(ctx context.Context, csrPEM []byte, certValidTTLInSec int64) ([]string, error)
 	Close()
 	// Retrieve CA root certs If CA publishes API endpoint for this
 	GetRootCertBundle() ([]string, error)
@@ -346,7 +348,7 @@ type SecretItem struct {
 
 type CredFetcher interface {
 	// GetPlatformCredential fetches workload credential provided by the platform.
-	GetPlatformCredential() (string, error)
+	GetPlatformCredential(ctx context.Context) (string, error)
 
 	// GetIdentityProvider returns the name of the IdentityProvider that can authenticate the workload credential.
 	GetIdentityProvider() string
@@ -434,6 +436,7 @@ type AuthenticationManager struct {
 func (am *AuthenticationManager) Authenticate(ctx context.Context) *Caller {
 	req := AuthContext{GrpcContext: ctx}
 	for _, authn := range am.Authenticators {
+		securityLog.Debugf("AuthenticatorType is %v", authn.AuthenticatorType())
 		u, err := authn.Authenticate(req)
 		if u != nil && len(u.Identities) > 0 && err == nil {
 			securityLog.Debugf("Authentication successful through auth source %v", u.AuthSource)
@@ -459,6 +462,7 @@ func (am *AuthenticationManager) FailedMessages() string {
 
 func ExtractBearerToken(ctx context.Context) (string, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
+	securityLog.Debugf("ExtractBearerToken md is %v", md)
 	if !ok {
 		return "", fmt.Errorf("no metadata is attached")
 	}

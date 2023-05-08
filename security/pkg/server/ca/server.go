@@ -87,6 +87,7 @@ func (s *Server) CreateCertificate(ctx context.Context, request *pb.IstioCertifi
 	sans := caller.Identities
 	crMetadata := request.Metadata.GetFields()
 	impersonatedIdentity := crMetadata[security.ImpersonatedIdentity].GetStringValue()
+	log.Debugf("CreateCertificate caller.Identities is %v impersonatedIdentity is %v", caller.Identities, impersonatedIdentity)
 	if impersonatedIdentity != "" {
 		// If there is an impersonated identity, we will override to use that identity (only single value
 		// supported), if the real caller is authorized.

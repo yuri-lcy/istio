@@ -110,7 +110,7 @@ func (a *KubeJWTAuthenticator) authenticateGrpc(ctx context.Context) (*security.
 		return nil, fmt.Errorf("target JWT extraction error: %v", err)
 	}
 	clusterID := extractClusterID(ctx)
-
+	log.Debugf("KubeJWTAuthenticator authenticateGrpc targetJWT is %v, clusterID is %v", targetJWT, clusterID)
 	return a.authenticate(targetJWT, clusterID)
 }
 
