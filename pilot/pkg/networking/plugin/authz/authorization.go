@@ -49,7 +49,7 @@ func NewBuilder(actionType ActionType, push *model.PushContext, proxy *model.Pro
 		IsCustomBuilder: actionType == Custom,
 	}
 	policies := push.AuthzPolicies.ListAuthorizationPolicies(proxy.ConfigNamespace, proxy.Labels)
-	if !util.IsIstioVersionGE117(proxy.IstioVersion) {
+	if !util.IsIstioVersionGE117(proxy.IstioVersion) || proxy.IsAcmg() {
 		option.UseAuthenticated = true
 	}
 	b := builder.New(tdBundle, push, policies, option)

@@ -26,7 +26,6 @@ import (
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/networking/core/v1alpha3/match"
 	"istio.io/istio/pilot/pkg/networking/plugin/authn"
-	"istio.io/istio/pilot/pkg/networking/plugin/authz"
 	"istio.io/istio/pilot/pkg/networking/util"
 	security "istio.io/istio/pilot/pkg/security/model"
 	"istio.io/istio/pilot/pkg/util/protoconv"
@@ -296,14 +295,7 @@ func (g *NodeProxyConfigGenerator) buildInboundPlaintextCaptureListener(proxy *m
 	}
 
 	for _, workload := range push.AcmgIndex.Workloads.NodeLocal(proxy.Metadata.NodeName) {
-		dummy := &model.Proxy{
-			ConfigNamespace: workload.Namespace,
-			Labels:          workload.Labels,
-		}
-		authzBuilder := authz.NewBuilder(authz.Local, push, dummy)
-
 		var filters []*listener.Filter
-		filters = append(filters, authzBuilder.BuildTCP()...)
 		filters = append(filters, &listener.Filter{
 			Name: wellknown.TCPProxy,
 			ConfigType: &listener.Filter_TypedConfig{
@@ -383,15 +375,7 @@ func (g *NodeProxyConfigGenerator) buildInboundCaptureListener(proxy *model.Prox
 
 	for _, workload := range push.AcmgIndex.Workloads.NodeLocal(proxy.Metadata.NodeName) {
 		if workload.Labels[model.TunnelLabel] != model.TunnelH2 {
-			dummy := &model.Proxy{
-				ConfigNamespace: workload.Namespace,
-				Labels:          workload.Labels,
-			}
-			authzBuilder := authz.NewBuilder(authz.Local, push, dummy)
-			tcpAuthzBuilder := authzBuilder.BuildTCP()
-
 			var filters []*listener.Filter
-			filters = append(filters, tcpAuthzBuilder...)
 			filters = append(filters, &listener.Filter{
 				Name: "envoy.filters.network.http_connection_manager",
 				ConfigType: &listener.Filter_TypedConfig{

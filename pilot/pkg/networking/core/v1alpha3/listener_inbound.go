@@ -803,6 +803,8 @@ func (lb *ListenerBuilder) buildInboundNetworkFiltersForHTTP(cc inboundChainConf
 			filters = append(filters, xdsfilters.IstioNetworkAuthenticationFilter)
 		}
 		filters = append(filters, buildMetadataExchangeNetworkFilters(istionetworking.ListenerClassSidecarInbound)...)
+	} else if lb.node.IsAcmg() {
+		filters = append(filters, xdsfilters.RestoreTLSFilter)
 	}
 
 	httpOpts := buildSidecarInboundHTTPOpts(lb, cc)
