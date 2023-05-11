@@ -516,6 +516,19 @@ func (ep *IstioEndpoint) IsDiscoverableFromProxy(p *Proxy) bool {
 	return ep.DiscoverabilityPolicy.IsDiscoverableFromProxy(ep, p)
 }
 
+// MetadataClone returns the cloned endpoint metadata used for telemetry purposes.
+// This should be used when the endpoint labels should be updated.
+func (ep *IstioEndpoint) MetadataClone() *EndpointMetadata {
+	return &EndpointMetadata{
+		Network:      ep.Network,
+		TLSMode:      ep.TLSMode,
+		WorkloadName: ep.WorkloadName,
+		Namespace:    ep.Namespace,
+		Labels:       maps.Clone(ep.Labels),
+		ClusterID:    ep.Locality.ClusterID,
+	}
+}
+
 // Metadata returns the endpoint metadata used for telemetry purposes.
 func (ep *IstioEndpoint) Metadata() *EndpointMetadata {
 	return &EndpointMetadata{
@@ -802,7 +815,7 @@ type AmbientIndexes interface {
 		currentSubs sets.Set[types.NamespacedName],
 	) sets.Set[types.NamespacedName]
 	Policies(requested sets.Set[ConfigKey]) []*workloadapi.Authorization
-	Waypoint(scope WaypointScope) sets.Set[netip.Addr]
+	Waypoint(scope WaypointScope) []netip.Addr
 	WorkloadsForWaypoint(scope WaypointScope) []*WorkloadInfo
 }
 
@@ -825,7 +838,7 @@ func (u NoopAmbientIndexes) Policies(sets.Set[ConfigKey]) []*workloadapi.Authori
 	return nil
 }
 
-func (u NoopAmbientIndexes) Waypoint(WaypointScope) sets.Set[netip.Addr] {
+func (u NoopAmbientIndexes) Waypoint(WaypointScope) []netip.Addr {
 	return nil
 }
 

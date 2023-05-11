@@ -20,6 +20,7 @@ package pilot
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,40 +58,40 @@ func TestGateway(t *testing.T) {
 }
 
 func ManagedOwnerGatewayTest(t framework.TestContext) {
-	image := fmt.Sprintf("%s/app:%s", t.Settings().Image.Hub, t.Settings().Image.Tag)
+	image := fmt.Sprintf("%s/app:%s", t.Settings().Image.Hub, strings.TrimSuffix(t.Settings().Image.Tag, "-distroless"))
 	t.ConfigIstio().YAML(apps.Namespace.Name(), fmt.Sprintf(`
 apiVersion: v1
 kind: Service
 metadata:
-  name: gateway-istio
+  name: managed-owner-istio
 spec:
   ports:
   - appProtocol: http
     name: default
     port: 80
   selector:
-    istio.io/gateway-name: gateway
+    istio.io/gateway-name: managed-owner
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: gateway-istio
+  name: managed-owner-istio
 spec:
   selector:
     matchLabels:
-      istio.io/gateway-name: gateway
+      istio.io/gateway-name: managed-owner
   replicas: 1
   template:
     metadata:
       labels:
-        istio.io/gateway-name: gateway
+        istio.io/gateway-name: managed-owner
     spec:
       containers:
       - name: fake
         image: %s
 `, image)).ApplyOrFail(t)
 	cls := t.Clusters().Kube().Default()
-	fetchFn := testKube.NewSinglePodFetch(cls, apps.Namespace.Name(), "istio.io/gateway-name=gateway")
+	fetchFn := testKube.NewSinglePodFetch(cls, apps.Namespace.Name(), "istio.io/gateway-name=managed-owner")
 	if _, err := testKube.WaitUntilPodsAreReady(fetchFn); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +100,7 @@ spec:
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: Gateway
 metadata:
-  name: gateway
+  name: managed-owner
 spec:
   gatewayClassName: istio
   listeners:
@@ -112,7 +113,7 @@ spec:
 	// Make sure Gateway becomes programmed..
 	client := t.Clusters().Kube().Default().GatewayAPI().GatewayV1beta1().Gateways(apps.Namespace.Name())
 	check := func() error {
-		gw, _ := client.Get(context.Background(), "gateway", metav1.GetOptions{})
+		gw, _ := client.Get(context.Background(), "managed-owner", metav1.GetOptions{})
 		if gw == nil {
 			return fmt.Errorf("failed to find gateway")
 		}
@@ -129,13 +130,13 @@ spec:
 
 	// Make sure we did not overwrite our deployment or service
 	dep, err := t.Clusters().Kube().Default().Kube().AppsV1().Deployments(apps.Namespace.Name()).
-		Get(context.Background(), "gateway-istio", metav1.GetOptions{})
+		Get(context.Background(), "managed-owner-istio", metav1.GetOptions{})
 	assert.NoError(t, err)
 	assert.Equal(t, dep.Labels[constants.ManagedGatewayLabel], "")
 	assert.Equal(t, dep.Spec.Template.Spec.Containers[0].Image, image)
 
 	svc, err := t.Clusters().Kube().Default().Kube().CoreV1().Services(apps.Namespace.Name()).
-		Get(context.Background(), "gateway-istio", metav1.GetOptions{})
+		Get(context.Background(), "managed-owner-istio", metav1.GetOptions{})
 	assert.NoError(t, err)
 	assert.Equal(t, svc.Labels[constants.ManagedGatewayLabel], "")
 	assert.Equal(t, svc.Spec.Type, corev1.ServiceTypeClusterIP)

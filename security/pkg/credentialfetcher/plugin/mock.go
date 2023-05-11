@@ -30,7 +30,7 @@ import (
 
 const fakeTokenPrefix = "fake-token-"
 
-var mockcredLog = log.RegisterScope("mockcred", "Mock credential fetcher for istio agent", 0)
+var mockcredLog = log.RegisterScope("mockcred", "Mock credential fetcher for istio agent")
 
 // MockPlugin is the plugin object.
 type MockPlugin struct {
