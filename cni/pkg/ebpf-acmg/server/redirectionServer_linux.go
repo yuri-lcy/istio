@@ -33,7 +33,7 @@ import (
 	"os"
 )
 
-var log = istiolog.RegisterScope("ebpf", "acmg ebpf", 0)
+var log = istiolog.RegisterScope("ebpf", "acmg ebpf")
 
 const (
 	FilesystemTypeBPFFS = unix.BPF_FS_MAGIC

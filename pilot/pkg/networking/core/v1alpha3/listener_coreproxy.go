@@ -232,7 +232,7 @@ func (lb *ListenerBuilder) coreProxyRouteDestination(out *route.Route, in *netwo
 	}
 
 	// Configure timeouts specified by Virtual Service if they are provided, otherwise set it to defaults.
-	action.Timeout = features.DefaultRequestTimeout
+	action.Timeout = istio_route.Notimeout
 	if in.Timeout != nil {
 		action.Timeout = in.Timeout
 	}

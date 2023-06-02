@@ -24,6 +24,7 @@ import (
 	"istio.io/api/mesh/v1alpha1"
 	"istio.io/istio/pilot/pkg/acmg"
 	"istio.io/istio/pilot/pkg/model"
+	istionetworking "istio.io/istio/pilot/pkg/networking"
 	"istio.io/istio/pilot/pkg/networking/core/v1alpha3/match"
 	"istio.io/istio/pilot/pkg/networking/plugin/authn"
 	"istio.io/istio/pilot/pkg/networking/util"
@@ -38,7 +39,7 @@ import (
 	"time"
 )
 
-var log = istiolog.RegisterScope("acmggen", "xDS Generator for acmg clients", 0)
+var log = istiolog.RegisterScope("acmggen", "xDS Generator for acmg clients")
 
 type NodeProxyConfigGenerator struct {
 	EndpointIndex *model.EndpointIndex
@@ -614,32 +615,36 @@ func buildCoreProxyLbEndpoints(push *model.PushContext) []*endpoint.LocalityLbEn
 	return []*endpoint.LocalityLbEndpoints{lbEndpoints}
 }
 
-func buildCoreProxyChain(workload acmg.Workload) *listener.FilterChain {
+func buildCoreProxyChain(push *model.PushContext, proxy *model.Proxy, workload acmg.Workload) *listener.FilterChain {
+	var filters []*listener.Filter
 
 	toCoreProxyCluster := toCoreProxyClusterName(workload.Identity())
+	filters = append(filters, &listener.Filter{
+		Name: wellknown.TCPProxy,
+		ConfigType: &listener.Filter_TypedConfig{TypedConfig: protoconv.MessageToAny(&tcp.TcpProxy{
+			AccessLog:        accessLogString(fmt.Sprintf("capture outbound (%v to core proxy)", workload.Identity())),
+			StatPrefix:       toCoreProxyCluster,
+			ClusterSpecifier: &tcp.TcpProxy_Cluster{Cluster: toCoreProxyCluster},
+			TunnelingConfig: &tcp.TcpProxy_TunnelingConfig{
+				Hostname: "%DOWNSTREAM_LOCAL_ADDRESS%", // (unused, per extended connect)
+				HeadersToAdd: []*core.HeaderValueOption{
+					// This is for server ztunnel - not really needed for waypoint proxy
+					{Header: &core.HeaderValue{Key: "x-envoy-original-dst-host", Value: "%DOWNSTREAM_LOCAL_ADDRESS%"}},
 
-	return &listener.FilterChain{
-		Name: toCoreProxyCluster,
-		Filters: []*listener.Filter{{
-			Name: wellknown.TCPProxy,
-			ConfigType: &listener.Filter_TypedConfig{TypedConfig: protoconv.MessageToAny(&tcp.TcpProxy{
-				AccessLog:        accessLogString(fmt.Sprintf("capture outbound (%v to core proxy)", workload.Identity())),
-				StatPrefix:       toCoreProxyCluster,
-				ClusterSpecifier: &tcp.TcpProxy_Cluster{Cluster: toCoreProxyCluster},
-				TunnelingConfig: &tcp.TcpProxy_TunnelingConfig{
-					Hostname: "%DOWNSTREAM_LOCAL_ADDRESS%", // (unused, per extended connect)
-					HeadersToAdd: []*core.HeaderValueOption{
-						// This is for server ztunnel - not really needed for waypoint proxy
-						{Header: &core.HeaderValue{Key: "x-envoy-original-dst-host", Value: "%DOWNSTREAM_LOCAL_ADDRESS%"}},
-
-						// This is for metadata propagation
-						// TODO: should we just set the baggage directly, as we have access to the Pod here (instead of using the filter)?
-						{Header: &core.HeaderValue{Key: "baggage", Value: "%DYNAMIC_METADATA([\"envoy.filters.listener.workload_metadata\", \"baggage\"])%"}},
-					},
+					// This is for metadata propagation
+					// TODO: should we just set the baggage directly, as we have access to the Pod here (instead of using the filter)?
+					{Header: &core.HeaderValue{Key: "baggage", Value: "%DYNAMIC_METADATA([\"envoy.filters.listener.workload_metadata\", \"baggage\"])%"}},
 				},
 			},
-			)},
-		}},
+		},
+		)},
+	})
+
+	filters = append(filters, push.Telemetry.TCPFilters(proxy, istionetworking.ListenerClassSidecarInbound)...)
+
+	return &listener.FilterChain{
+		Name:    toCoreProxyCluster,
+		Filters: filters,
 	}
 }
 
@@ -737,7 +742,7 @@ func (g *NodeProxyConfigGenerator) buildPodOutboundCaptureListener(proxy *model.
 	seen := sets.String{}
 	// 这里从workload cache中取出的workload确保了全部是acmg范围内的
 	for _, sourceWl := range push.AcmgIndex.Workloads.NodeLocal(proxy.Metadata.NodeName) {
-		chain := buildCoreProxyChain(sourceWl)
+		chain := buildCoreProxyChain(push, proxy, sourceWl)
 		sourceMatch.Map[sourceWl.PodIP] = match.ToChain(chain.Name)
 		if !seen.InsertContains(chain.Name) {
 			l.FilterChains = append(l.FilterChains, chain)

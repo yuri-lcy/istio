@@ -39,7 +39,7 @@ import (
 	istiolog "istio.io/pkg/log"
 )
 
-var log = istiolog.RegisterScope("acmg", "acmg controller", 0)
+var log = istiolog.RegisterScope("acmg", "acmg controller")
 
 func IsPodInIpset(pod *corev1.Pod) bool {
 	ipset, err := Ipset.List()

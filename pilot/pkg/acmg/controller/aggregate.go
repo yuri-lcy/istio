@@ -11,7 +11,7 @@ import (
 	"sync"
 )
 
-var log = istiolog.RegisterScope("acmg", "acmg mesh controllers", 0)
+var log = istiolog.RegisterScope("acmg", "acmg mesh controllers")
 
 type Options struct {
 	xds       model.XDSUpdater
