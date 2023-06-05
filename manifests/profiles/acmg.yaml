@@ -34,7 +34,7 @@ spec:
   values:
     global:
       logging:
-        level: "default:debug,ads:debug,acmg:debug,ebpf:debug,serverca:debug,security:debug"
+        level: "default:debug,model:debug"
     pilot:
       env:
         # Setup more secure default that is off in 'default' only for backwards compatibility

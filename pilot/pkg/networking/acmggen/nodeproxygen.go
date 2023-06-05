@@ -377,13 +377,19 @@ func (g *NodeProxyConfigGenerator) buildInboundCaptureListener(proxy *model.Prox
 	for _, workload := range push.AcmgIndex.Workloads.NodeLocal(proxy.Metadata.NodeName) {
 		if workload.Labels[model.TunnelLabel] != model.TunnelH2 {
 			var filters []*listener.Filter
+			var httpConnFilters []*httpconn.HttpFilter
+			httpConnFilters = append(httpConnFilters, push.Telemetry.HTTPFilters(proxy, istionetworking.ListenerClassSidecarInbound)...)
+			httpConnFilters = append(httpConnFilters, &httpconn.HttpFilter{
+				Name:       "envoy.filters.http.router",
+				ConfigType: &httpconn.HttpFilter_TypedConfig{TypedConfig: protoconv.MessageToAny(&routerfilter.Router{})},
+			})
 			filters = append(filters, &listener.Filter{
 				Name: "envoy.filters.network.http_connection_manager",
 				ConfigType: &listener.Filter_TypedConfig{
 					TypedConfig: protoconv.MessageToAny(&httpconn.HttpConnectionManager{
 						AccessLog:  accessLogString("inbound hcm"),
 						CodecType:  0,
-						StatPrefix: "inbound_hcm",
+						StatPrefix: "inbound_hcm_" + workload.PodIP,
 						RouteSpecifier: &httpconn.HttpConnectionManager_RouteConfig{
 							RouteConfig: &route.RouteConfiguration{
 								Name: "local_route",
@@ -410,10 +416,7 @@ func (g *NodeProxyConfigGenerator) buildInboundCaptureListener(proxy *model.Prox
 							},
 						},
 						// TODO rewrite destination port to original_dest port
-						HttpFilters: []*httpconn.HttpFilter{{
-							Name:       "envoy.filters.http.router",
-							ConfigType: &httpconn.HttpFilter_TypedConfig{TypedConfig: protoconv.MessageToAny(&routerfilter.Router{})},
-						}},
+						HttpFilters: httpConnFilters,
 						Http2ProtocolOptions: &core.Http2ProtocolOptions{
 							AllowConnect: true,
 						},
@@ -615,9 +618,10 @@ func buildCoreProxyLbEndpoints(push *model.PushContext) []*endpoint.LocalityLbEn
 	return []*endpoint.LocalityLbEndpoints{lbEndpoints}
 }
 
-func buildCoreProxyChain(push *model.PushContext, proxy *model.Proxy, workload acmg.Workload) *listener.FilterChain {
+func buildToCoreProxyChain(push *model.PushContext, proxy *model.Proxy, workload acmg.Workload) *listener.FilterChain {
 	var filters []*listener.Filter
 
+	filters = append(filters, push.Telemetry.TCPFilters(proxy, istionetworking.ListenerClassSidecarInbound)...)
 	toCoreProxyCluster := toCoreProxyClusterName(workload.Identity())
 	filters = append(filters, &listener.Filter{
 		Name: wellknown.TCPProxy,
@@ -639,8 +643,6 @@ func buildCoreProxyChain(push *model.PushContext, proxy *model.Proxy, workload a
 		},
 		)},
 	})
-
-	filters = append(filters, push.Telemetry.TCPFilters(proxy, istionetworking.ListenerClassSidecarInbound)...)
 
 	return &listener.FilterChain{
 		Name:    toCoreProxyCluster,
@@ -742,7 +744,7 @@ func (g *NodeProxyConfigGenerator) buildPodOutboundCaptureListener(proxy *model.
 	seen := sets.String{}
 	// 这里从workload cache中取出的workload确保了全部是acmg范围内的
 	for _, sourceWl := range push.AcmgIndex.Workloads.NodeLocal(proxy.Metadata.NodeName) {
-		chain := buildCoreProxyChain(push, proxy, sourceWl)
+		chain := buildToCoreProxyChain(push, proxy, sourceWl)
 		sourceMatch.Map[sourceWl.PodIP] = match.ToChain(chain.Name)
 		if !seen.InsertContains(chain.Name) {
 			l.FilterChains = append(l.FilterChains, chain)

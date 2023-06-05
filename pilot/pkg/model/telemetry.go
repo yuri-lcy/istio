@@ -881,7 +881,7 @@ func buildHTTPTelemetryFilter(class networking.ListenerClass, metricsCfg []telem
 	for _, cfg := range metricsCfg {
 		switch cfg.Provider.GetProvider().(type) {
 		case *meshconfig.MeshConfig_ExtensionProvider_Prometheus:
-			if cfg.NodeType == Waypoint {
+			if cfg.NodeType == Waypoint || cfg.NodeType == NodeProxy || cfg.NodeType == CoreProxy {
 				f := &hcm.HttpFilter{
 					Name:       xds.StatsFilterName,
 					ConfigType: &hcm.HttpFilter_TypedConfig{TypedConfig: waypointStatsConfig},

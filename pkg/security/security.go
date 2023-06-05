@@ -439,7 +439,6 @@ type AuthenticationManager struct {
 func (am *AuthenticationManager) Authenticate(ctx context.Context) *Caller {
 	req := AuthContext{GrpcContext: ctx}
 	for _, authn := range am.Authenticators {
-		securityLog.Debugf("AuthenticatorType is %v", authn.AuthenticatorType())
 		u, err := authn.Authenticate(req)
 		if u != nil && len(u.Identities) > 0 && err == nil {
 			securityLog.Debugf("Authentication successful through auth source %v", u.AuthSource)
@@ -465,7 +464,6 @@ func (am *AuthenticationManager) FailedMessages() string {
 
 func ExtractBearerToken(ctx context.Context) (string, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
-	securityLog.Debugf("ExtractBearerToken md is %v", md)
 	if !ok {
 		return "", fmt.Errorf("no metadata is attached")
 	}
