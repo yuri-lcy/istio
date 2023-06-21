@@ -34,7 +34,7 @@ spec:
   values:
     global:
       logging:
-        level: "default:debug,model:debug"
+        level: "default:info"
     pilot:
       env:
         # Setup more secure default that is off in 'default' only for backwards compatibility
