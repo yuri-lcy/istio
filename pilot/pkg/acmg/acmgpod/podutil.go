@@ -123,16 +123,3 @@ func ConvertDisabledSelectors(selectors []*metav1.LabelSelector) []labels.Select
 	}
 	return res
 }
-
-// We do not support the istio.io/rev or istio-injection sidecar labels
-// If a pod or namespace has these labels, ambient mesh will not be applied
-// to that namespace
-func HasLegacyLabel(lbl map[string]string) bool {
-	for _, sel := range LegacySelectors {
-		if sel.Matches(labels.Set(lbl)) {
-			return true
-		}
-	}
-
-	return false
-}

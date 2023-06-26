@@ -1115,3 +1115,59 @@ func GetHostIPByRoute(pods kclient.Client[*corev1.Pod]) (string, error) {
 	}
 	return "", fmt.Errorf("failed to get outbound IP to Pods")
 }
+
+// GetHostIPByRoute get the automatically chosen host ip to the Pod's CIDR
+func GetHostIPByRouteForAcmg(pods kclient.Client[*corev1.Pod]) (string, error) {
+	// We assume per node POD's CIDR is the same block, so the route to the POD
+	// from host should be "same". Otherwise, there may multiple host IPs will be
+	// used as source to dial to PODs.
+	for _, pod := range pods.List(metav1.NamespaceAll, nodeProxyLabels) {
+		targetIP := pod.Status.PodIP
+		if hostIP := getOutboundIP(targetIP); hostIP != nil {
+			return hostIP.String(), nil
+		}
+	}
+	return "", fmt.Errorf("failed to get outbound IP to Pods")
+}
+
+// GetHostIPByRoute get the automatically chosen host ip to the Pod's CIDR
+func GetHostIPByRouteForAmbient(pods kclient.Client[*corev1.Pod]) (string, error) {
+	// We assume per node POD's CIDR is the same block, so the route to the POD
+	// from host should be "same". Otherwise, there may multiple host IPs will be
+	// used as source to dial to PODs.
+	for _, pod := range pods.List(metav1.NamespaceAll, nodeProxyLabels) {
+		targetIP := pod.Status.PodIP
+		if hostIP := getOutboundIP(targetIP); hostIP != nil {
+			return hostIP.String(), nil
+		}
+	}
+	return "", fmt.Errorf("failed to get outbound IP to Pods")
+}
+
+// GetHostIPByRoute get the automatically chosen host ip to the Pod's CIDR
+func GetHostIPByRouteForSidecar(pods kclient.Client[*corev1.Pod]) (string, error) {
+	// We assume per node POD's CIDR is the same block, so the route to the POD
+	// from host should be "same". Otherwise, there may multiple host IPs will be
+	// used as source to dial to PODs.
+	for _, pod := range pods.List(metav1.NamespaceAll, nodeProxyLabels) {
+		targetIP := pod.Status.PodIP
+		if hostIP := getOutboundIP(targetIP); hostIP != nil {
+			return hostIP.String(), nil
+		}
+	}
+	return "", fmt.Errorf("failed to get outbound IP to Pods")
+}
+
+// GetHostIPByRoute get the automatically chosen host ip to the Pod's CIDR
+func GetHostIPByRouteForOther(pods kclient.Client[*corev1.Pod]) (string, error) {
+	// We assume per node POD's CIDR is the same block, so the route to the POD
+	// from host should be "same". Otherwise, there may multiple host IPs will be
+	// used as source to dial to PODs.
+	for _, pod := range pods.List(metav1.NamespaceAll, nodeProxyLabels) {
+		targetIP := pod.Status.PodIP
+		if hostIP := getOutboundIP(targetIP); hostIP != nil {
+			return hostIP.String(), nil
+		}
+	}
+	return "", fmt.Errorf("failed to get outbound IP to Pods")
+}
