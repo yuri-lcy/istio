@@ -624,6 +624,7 @@ func (p *XdsProxy) close() {
 	}
 }
 
+// 注册grpc服务，注册的为XdsProxy
 func (p *XdsProxy) initDownstreamServer() error {
 	l, err := uds.NewListener(p.xdsUdsPath)
 	if err != nil {
